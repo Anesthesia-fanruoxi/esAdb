@@ -1,0 +1,16 @@
+# 编译产物
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+
+# 本地配置（含密钥，勿提交）
+config.yaml
+
+# 系统
+.DS_Store
+Thumbs.db
