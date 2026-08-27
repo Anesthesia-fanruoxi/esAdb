@@ -2,10 +2,9 @@ package config
 
 import (
 	"fmt"
+	"github.com/spf13/viper"
 	"os"
 	"strings"
-
-	"github.com/spf13/viper"
 )
 
 // Config 全局配置
@@ -58,12 +57,12 @@ type MySQLConfig struct {
 }
 
 type SyncConfig struct {
-	Interval       int `mapstructure:"interval"`         // 同步间隔（秒）
-	MaxSize        int `mapstructure:"max_size"`         // 单次最大条数
-	MaxTime        int `mapstructure:"max_time"`         // 同步最大时间（秒）
-	MaxRetry       int `mapstructure:"max_retry"`        // 最大重试次数
-	RetryDelay     int `mapstructure:"retry_delay"`      // 重试延迟（秒）
-	RetryDelayMax  int `mapstructure:"retry_delay_max"`  // 重试最大延迟（秒）
+	Interval      int `mapstructure:"interval"`        // 同步间隔（秒）
+	MaxSize       int `mapstructure:"max_size"`        // 单次最大条数
+	MaxTime       int `mapstructure:"max_time"`        // 同步最大时间（秒）
+	MaxRetry      int `mapstructure:"max_retry"`       // 最大重试次数
+	RetryDelay    int `mapstructure:"retry_delay"`     // 重试延迟（秒）
+	RetryDelayMax int `mapstructure:"retry_delay_max"` // 重试最大延迟（秒）
 }
 
 var global *Config
@@ -95,7 +94,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("mysql.port", 3306)
 	v.SetDefault("mysql.table", "app_event_log")
 	v.SetDefault("sync.interval", 10)
-	v.SetDefault("sync.max_size", 1000)
+	v.SetDefault("sync.max_size", 10000)
 	v.SetDefault("sync.max_time", 10)
 	v.SetDefault("sync.max_retry", 3)
 	v.SetDefault("sync.retry_delay", 1)
@@ -167,7 +166,7 @@ func (c *Config) normalize() {
 		c.Sync.Interval = 10
 	}
 	if c.Sync.MaxSize <= 0 {
-		c.Sync.MaxSize = 1000
+		c.Sync.MaxSize = 10000
 	}
 	if c.Sync.MaxRetry <= 0 {
 		c.Sync.MaxRetry = 3

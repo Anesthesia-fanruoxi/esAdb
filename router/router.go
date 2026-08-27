@@ -1,11 +1,10 @@
 package router
 
 import (
-	"net/http"
-
 	"esAdb/api"
 	"esAdb/common"
 	"esAdb/config"
+	"net/http"
 )
 
 // New 注册路由

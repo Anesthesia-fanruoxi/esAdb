@@ -50,7 +50,7 @@ func Init(cfg *config.Config) *Manager {
 
 func Get() *Manager { return mgr }
 
-// StartIncremental 启动增量准点同步（需 ES+MySQL 均就绪）
+// StartIncremental 启动增量同步（需 ES+MySQL 均就绪）
 func (m *Manager) StartIncremental(ctx context.Context) {
 	if m == nil || m.Syncer == nil {
 		return

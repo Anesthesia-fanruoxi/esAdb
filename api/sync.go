@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -22,7 +23,7 @@ func NewSyncAPI(cfg *config.Config) *SyncAPI {
 
 type rangeReq struct {
 	Start string `json:"start"` // 2006-01-02 15:04:05
-	End   string `json:"end"`   // 可选，空则同步到启动准点
+	End   string `json:"end"`   // 可选，空则补到启动时刻的上一周期终点（AlignFloor）
 }
 
 // HandleRange POST /sync/range  按时间范围补数（异步）
@@ -51,7 +52,6 @@ func (a *SyncAPI) HandleRange(w http.ResponseWriter, r *http.Request) {
 		common.WriteFail(w, http.StatusBadRequest, 4, "请求体需 JSON：{start,end?}")
 		return
 	}
-	// 兼容 query
 	if req.Start == "" {
 		req.Start = r.URL.Query().Get("start")
 	}
@@ -85,12 +85,59 @@ func (a *SyncAPI) HandleRange(w http.ResponseWriter, r *http.Request) {
 	common.WriteOK(w, info)
 }
 
-// HandleStatus GET /sync/status
+// HandleStatus GET /sync/status  SSE 每 5 秒推送服务/内存/队列/进度
 func (a *SyncAPI) HandleStatus(w http.ResponseWriter, r *http.Request) {
-	m := store.Get()
-	if m == nil || m.Syncer == nil {
-		common.WriteOK(w, map[string]interface{}{"enabled": false})
+	if r.Method != http.MethodGet {
+		common.WriteFail(w, http.StatusMethodNotAllowed, 405, "仅支持 GET")
 		return
 	}
-	common.WriteOK(w, m.Syncer.Status())
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		common.WriteFail(w, http.StatusInternalServerError, 500, "不支持 SSE")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	m := store.Get()
+	send := func() error {
+		var snap map[string]interface{}
+		if m == nil || m.Syncer == nil {
+			snap = map[string]interface{}{"enabled": false}
+		} else {
+			snap = m.Syncer.Snapshot()
+		}
+		b, err := common.MarshalJSON(snap, false)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "event: status\ndata: %s\n\n", b); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
+	if err := send(); err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := send(); err != nil {
+				return
+			}
+		}
+	}
 }

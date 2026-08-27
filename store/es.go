@@ -42,7 +42,7 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 		return nil, fmt.Errorf("ES 未配置")
 	}
 	if size <= 0 {
-		size = 1000
+		size = 10000
 	}
 	method := s.cfg.Method
 	if method == "" {

@@ -2,17 +2,16 @@ package main
 
 import (
 	"context"
-	"flag"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-
 	"esAdb/common"
 	"esAdb/config"
 	"esAdb/model"
 	"esAdb/router"
 	"esAdb/store"
+	"flag"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -49,7 +48,7 @@ func main() {
 	mgr.StartIncremental(ctx)
 
 	addr := cfg.Server.Addr
-	common.Info("HTTP 监听 %s  →  GET /health | POST /sync/range | GET /sync/status", addr)
+	common.Info("HTTP 监听 %s  →  GET /health | POST /sync/range | GET /sync/status (SSE 5s)", addr)
 
 	srv := &http.Server{Addr: addr, Handler: router.New(cfg)}
 	go func() {

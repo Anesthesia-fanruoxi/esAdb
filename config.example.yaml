@@ -26,8 +26,8 @@ mysql:
   table: "app_event_log"
 
 sync:
-  interval: 10
-  max_size: 1000
+  interval: 10   # 可改为 5
+  max_size: 10000
   max_time: 10
   max_retry: 3
   retry_delay: 1

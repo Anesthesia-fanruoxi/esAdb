@@ -41,24 +41,24 @@ func AlignCeil(t time.Time, intervalSec int) time.Time {
 	return time.Unix(unix-mod+int64(intervalSec), 0).In(t.Location())
 }
 
-// PrevWindow 上一已结束时间窗 [floor-interval, floor)
-// 例：interval=10，当前 17:28:01 → [17:27:50, 17:28:00)
+// PrevWindow 相对当前时刻的上一已结束窗 [floor-interval, floor)
+// floor 为当前所在周期的起点（上一周期终点）；例 interval=10，18:50:15 → [18:50:00,18:50:10)
 func PrevWindow(t time.Time, intervalSec int) (start, end time.Time) {
 	end = AlignFloor(t, intervalSec)
 	start = end.Add(-time.Duration(intervalSec) * time.Second)
 	return start, end
 }
 
-// TickSeconds 增量巡检周期 = interval/3，至少 1 秒
-func TickSeconds(intervalSec int) int {
+// CountWindows [start,end) 内按 interval 切分的窗口总数
+func CountWindows(start, end time.Time, intervalSec int) int64 {
 	if intervalSec <= 0 {
 		intervalSec = 10
 	}
-	t := intervalSec / 3
-	if t < 1 {
-		t = 1
+	var n int64
+	for cur := start; cur.Before(end); cur = cur.Add(time.Duration(intervalSec) * time.Second) {
+		n++
 	}
-	return t
+	return n
 }
 
 // WindowKey 窗口去重键
