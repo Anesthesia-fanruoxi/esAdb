@@ -241,7 +241,7 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 
 | 参数 | 说明 |
 |---|---|
-| `start`、`end` 均空 | **最近 1 小时**（按 interval/lag 对齐，结束于 lag 边界） |
+| `start`、`end` 均空 | **上一个整点小时**（如 13:45 → `[12:00:00, 13:00:00)`） |
 | 仅 `start` | 取包含该时刻的单个对齐窗口 |
 | `start` + `end` | 对齐后的完整区间 |
 
@@ -279,7 +279,7 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 - `history` → 首屏回放最近 1 小时
 - `pipeline` → 更新接线图与 KPI
 - `runtime` → 服务状态卡片
-- `incremental` → 增量折线图 / 最近增量表（灰色区域标比对范围）
+- `incremental` → 增量折线图 / 最近增量表
 - `backfill` → 侧栏补全进度
 
 详情 SSE：

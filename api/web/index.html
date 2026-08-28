@@ -562,7 +562,6 @@
             <div class="incr-legend">
               <span class="lg"><span class="sw" style="background:var(--accent)"></span>hits / 窗</span>
               <span class="lg"><span class="sw" style="background:#9aa6b2"></span>written / 窗</span>
-              <span class="lg"><span class="sw" style="background:#94a3b8;opacity:.45"></span>比对范围（最近 1 小时）</span>
               <span class="lg">移动鼠标查看明细</span>
             </div>
             <div class="chart-stage" id="incrStage">
@@ -615,11 +614,11 @@
           <div class="card-head"><h2>对比查询</h2></div>
           <div class="card-body">
             <div class="form-row">
-              <label>开始<input type="text" id="cmpStart" placeholder="留空则最近 1 小时" /></label>
-              <label>结束<input type="text" id="cmpEnd" placeholder="留空则 lag 对齐边界" /></label>
+              <label>开始<input type="text" id="cmpStart" placeholder="可选" /></label>
+              <label>结束<input type="text" id="cmpEnd" placeholder="可选" /></label>
               <button class="btn btn-secondary" id="btnCompare" onclick="doCompare()">对比</button>
             </div>
-            <p class="hint" id="cmpHint">默认比对最近 1 小时（按 interval / lag 对齐）</p>
+            <p class="hint" id="cmpHint">开始、结束均不填时，默认查询上一个整点小时</p>
             <div class="compare-grid">
               <div><div class="num" id="cmpEs">-</div><div class="lbl">ES</div></div>
               <div><div class="num" id="cmpAdb">-</div><div class="lbl">ADB</div></div>
@@ -735,39 +734,9 @@
     const MAX = 120; // 后端内存只保留最近一小时（约 120 条）
     const ROWS = 100; // 最近增量表格显示条数
     let pipeCfg = { intervalSec: 10, lagSec: 60 };
-    let compareRange = null;
-    let cmpUserEdited = false;
     let compareReady = false;
 
     function pad2(n) { return String(n).padStart(2, '0'); }
-    function fmtDateTimeMs(ms) {
-      const d = new Date(ms);
-      return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
-    }
-    function alignFloorMs(ms, intervalMs) {
-      return ms - (ms % intervalMs);
-    }
-    function calcLastHourRange(intervalSec, lagSec) {
-      const intervalMs = (intervalSec || 10) * 1000;
-      const lagMs = (lagSec || 60) * 1000;
-      const ref = Date.now() - lagMs;
-      const endMs = alignFloorMs(ref, intervalMs);
-      const startMs = alignFloorMs(endMs - 3600000, intervalMs);
-      return { startMs, endMs, start: fmtDateTimeMs(startMs), end: fmtDateTimeMs(endMs) };
-    }
-    function refreshCompareDefaults(forceInputs) {
-      const r = calcLastHourRange(pipeCfg.intervalSec, pipeCfg.lagSec);
-      if (forceInputs || !cmpUserEdited) {
-        document.getElementById('cmpStart').value = r.start;
-        document.getElementById('cmpEnd').value = r.end;
-        compareRange = r;
-      }
-      document.getElementById('cmpHint').textContent =
-        `默认比对最近 1 小时（interval ${pipeCfg.intervalSec}s · lag ${pipeCfg.lagSec}s 对齐）：[${r.start} ~ ${r.end})`;
-      drawIncr();
-    }
-    document.getElementById('cmpStart').addEventListener('input', () => { cmpUserEdited = true; });
-    document.getElementById('cmpEnd').addEventListener('input', () => { cmpUserEdited = true; });
 
     function incrRowHtml(pt) {
       return `<tr><td>${pt.atStr||''}</td><td>${pt.window?.start||''}</td><td>${pt.hits}</td><td>${pt.written}</td><td>${pt.durationMs}ms</td><td class="stat-${pt.success?'ok':'fail'}">${pt.success?'ok':'fail'}</td></tr>`;
@@ -831,25 +800,6 @@
       const tMin = Math.min(...times), tMax = Math.max(...times);
       const spanT = Math.max(tMax - tMin, 1000);
       const x = t => pad.l + (t - tMin) / spanT * iw;
-
-      // 比对范围灰色区域（最近 1 小时，随时间滚动）
-      if (compareRange && compareRange.startMs != null && compareRange.endMs != null) {
-        const rs = compareRange.startMs, re = compareRange.endMs;
-        if (re > tMin && rs < tMax + spanT) {
-          const x1 = x(Math.max(rs, tMin));
-          const x2 = x(Math.min(re, Math.max(tMax, rs + 1)));
-          if (x2 > x1) {
-            const shade = document.createElementNS(NS, 'rect');
-            shade.setAttribute('x', x1);
-            shade.setAttribute('y', pad.t);
-            shade.setAttribute('width', x2 - x1);
-            shade.setAttribute('height', ih);
-            shade.setAttribute('fill', '#94a3b8');
-            shade.setAttribute('opacity', '0.18');
-            svgEl.appendChild(shade);
-          }
-        }
-      }
 
       // Y 轴（hits）
       const maxV = niceMax(Math.max(...incr.map(p => p.hits || 0), 1));
@@ -1200,11 +1150,9 @@
     function setPipe(p) {
       pipeCfg.intervalSec = p.intervalSec || 10;
       pipeCfg.lagSec = p.lagSec || 60;
-      refreshCompareDefaults(false);
       if (!compareReady) {
         compareReady = true;
-        doCompare(true);
-      } else if (!cmpUserEdited) {
+        // 首次自动对比：输入为空 → 上一个整点小时
         doCompare(true);
       }
       document.getElementById('esSt').textContent = p.esReady ? '就绪' : '未就绪';
@@ -1289,9 +1237,13 @@
       const end = document.getElementById('cmpEnd').value.trim();
       const btn = document.getElementById('btnCompare');
       btn.disabled = true;
-      if (!silent) log('[对比] 查询 ' + (start || '最近1小时') + (end ? ' ~ ' + end : ''));
+      const label = (!start && !end) ? '上一个整点小时（默认）' : ((start || '?') + (end ? ' ~ ' + end : ''));
+      if (!silent) log('[对比] 查询 ' + label);
       try {
-        const resp = await apiPost('/sync/compare', { start: start || undefined, end: end || undefined });
+        const body = {};
+        if (start) body.start = start;
+        if (end) body.end = end;
+        const resp = await apiPost('/sync/compare', body);
         if (resp.code !== 0) {
           if (!silent) alert('对比失败: ' + resp.message);
           log('[对比] 失败: ' + resp.message, true);
@@ -1301,18 +1253,10 @@
         document.getElementById('cmpEs').textContent = d.es.count;
         document.getElementById('cmpAdb').textContent = d.mysql.count;
         document.getElementById('cmpDiff').textContent = (d.diff > 0 ? '+' : '') + d.diff;
-        document.getElementById('cmpDiff').className = 'num' + (d.match ? ' diff-zero' : ' diff-pos');
-        compareRange = {
-          startMs: d.range.startMs,
-          endMs: d.range.endMs,
-          start: d.range.start,
-          end: d.range.end,
-        };
+        document.getElementById('cmpDiff').className = 'num' + (d.diff === 0 ? ' diff-zero' : ' diff-pos');
+        const defHint = (!start && !end) ? '（默认上一个整点小时）' : '';
         document.getElementById('cmpRange').textContent =
-          `实际比对范围：[${d.range.start} ~ ${d.range.end}) · ES 字段 ${d.es.field} · ADB 字段 ${d.mysql.field} · ${d.match ? '一致 ✓' : '不一致 ✗'}`;
-        document.getElementById('cmpHint').textContent =
-          `默认最近 1 小时（interval ${pipeCfg.intervalSec}s · lag ${pipeCfg.lagSec}s）；当前比对：[${d.range.start} ~ ${d.range.end})`;
-        drawIncr();
+          `实际比对范围${defHint}：[${d.range.start} ~ ${d.range.end}) · ES ${d.es.field} · ADB ${d.mysql.field} · ${d.match ? '一致 ✓' : '不一致 ✗'}`;
         log('[对比] ES=' + d.es.count + ' ADB=' + d.mysql.count + ' diff=' + d.diff);
       } catch (e) {
         if (!silent) alert('请求失败: ' + e.message);
@@ -1351,8 +1295,7 @@
     es.addEventListener('backfill', e => addBf(JSON.parse(e.data)));
     es.addEventListener('runtime', e => onRuntime(JSON.parse(e.data)));
 
-    // 初始化绘制与比对默认范围
-    refreshCompareDefaults(true);
+    // 初始化绘制
     requestAnimationFrame(drawIncr);
   </script>
 </body>

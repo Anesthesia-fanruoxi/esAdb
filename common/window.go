@@ -223,23 +223,22 @@ type CompareResult struct {
 	Match  bool        `json:"match"`
 }
 
-// LastHourCompareWindow 最近 1 小时对比范围（对齐 interval，结束于 lag 边界）
-func LastHourCompareWindow(now time.Time, intervalSec, lagSec int) TimeRangeMs {
-	intervalMs := IntervalMs(intervalSec)
-	lagMs := LagMs(lagSec)
-	_, endMs := PrevWindowMs(now.UnixMilli()-lagMs, intervalMs)
-	startMs := AlignFloorMs(endMs-3600000, intervalMs)
-	return NewTimeRangeMs(startMs, endMs)
+// PrevClockHourWindow 上一个整点小时 [本小时整点-1h, 本小时整点)
+// 例如 now=13:45 → [12:00:00, 13:00:00)；now=13:00:00 → [12:00:00, 13:00:00)
+func PrevClockHourWindow(now time.Time) TimeRangeMs {
+	end := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
+	start := end.Add(-time.Hour)
+	return NewTimeRangeMs(start.UnixMilli(), end.UnixMilli())
 }
 
 // CalcCompareRange 计算对比时间范围
-// - 无参：最近 1 小时（对齐 interval，结束于 lag 边界）
+// - 无参：上一个整点小时
 // - 仅 start：包含该时刻的对齐窗口 [floor, floor+interval)
 // - start+end：对齐后的完整区间
 func CalcCompareRange(startMs, endMs int64, intervalSec, lagSec int, now time.Time) (TimeRangeMs, error) {
 	intervalMs := IntervalMs(intervalSec)
 	if startMs <= 0 && endMs <= 0 {
-		return LastHourCompareWindow(now, intervalSec, lagSec), nil
+		return PrevClockHourWindow(now), nil
 	}
 	if startMs > 0 && endMs <= 0 {
 		s := AlignFloorMs(startMs, intervalMs)
@@ -253,5 +252,5 @@ func CalcCompareRange(startMs, endMs int64, intervalSec, lagSec int, now time.Ti
 		}
 		return NewTimeRangeMs(s, e), nil
 	}
-	return TimeRangeMs{}, fmt.Errorf("请提供 start，或留空使用增量默认窗口")
+	return TimeRangeMs{}, fmt.Errorf("请提供 start，或 start/end 均留空以查询上一个整点小时")
 }
