@@ -60,6 +60,19 @@ func (s *ESStore) SearchByRangeMs(startMs, endMs int64, size int, logQuery bool)
 	return s.SearchByRange(time.UnixMilli(startMs), time.UnixMilli(endMs), size, logQuery)
 }
 
+// queryStringClause 使用配置 es.query_string（如 method:addEventLog）
+func (s *ESStore) queryStringClause() map[string]interface{} {
+	q := strings.TrimSpace(s.cfg.QueryString)
+	if q == "" {
+		q = "method:addEventLog"
+	}
+	return map[string]interface{}{
+		"query_string": map[string]interface{}{
+			"query": q,
+		},
+	}
+}
+
 // SearchByRange 查询 [start, end) 内 method 匹配的文档；logQuery 控制是否打印查询日志
 func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) ([]ESRecord, error) {
 	if strings.TrimSpace(s.cfg.URL) == "" {
@@ -67,10 +80,6 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 	}
 	if size <= 0 {
 		size = 1000
-	}
-	method := s.cfg.Method
-	if method == "" {
-		method = "addEventLog"
 	}
 	dateField := s.cfg.DateField
 	if dateField == "" {
@@ -83,11 +92,7 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 		"query": map[string]interface{}{
 			"bool": map[string]interface{}{
 				"must": []interface{}{
-					map[string]interface{}{
-						"term": map[string]interface{}{
-							"method.keyword": method,
-						},
-					},
+					s.queryStringClause(),
 					map[string]interface{}{
 						"range": map[string]interface{}{
 							dateField: map[string]interface{}{
@@ -165,10 +170,6 @@ func (s *ESStore) CountByRangeMs(startMs, endMs int64) (int, error) {
 	if strings.TrimSpace(s.cfg.URL) == "" {
 		return 0, fmt.Errorf("ES 未配置")
 	}
-	method := s.cfg.Method
-	if method == "" {
-		method = "addEventLog"
-	}
 	dateField := s.cfg.DateField
 	if dateField == "" {
 		dateField = "@timestamp"
@@ -177,18 +178,13 @@ func (s *ESStore) CountByRangeMs(startMs, endMs int64) (int, error) {
 	start := time.UnixMilli(startMs)
 	end := time.UnixMilli(endMs)
 
-	// 与 SearchByRange 保持一致：仅 method + 时间范围（勿对 text 字段做 wildcard）
 	query := map[string]interface{}{
 		"size":             0,
 		"track_total_hits": true,
 		"query": map[string]interface{}{
 			"bool": map[string]interface{}{
 				"must": []interface{}{
-					map[string]interface{}{
-						"term": map[string]interface{}{
-							"method.keyword": method,
-						},
-					},
+					s.queryStringClause(),
 					map[string]interface{}{
 						"range": map[string]interface{}{
 							dateField: map[string]interface{}{

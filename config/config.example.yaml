@@ -12,7 +12,7 @@ es:
   index: "ysh-ysh-app-info*"
   username: ""
   password: ""
-  method: "addEventLog"
+  query_string: "method:addEventLog"   # ES query_string 查询串
   fields: "content"
   dateField: "@timestamp"
   strip: "用户事件记录==="   # 正文事件前缀标识，识别并去掉头部；空串则用默认值：用户事件记录===

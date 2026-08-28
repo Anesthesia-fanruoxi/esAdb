@@ -30,14 +30,14 @@ type LogConfig struct {
 }
 
 type ESConfig struct {
-	URL       string `mapstructure:"url"`
-	Index     string `mapstructure:"index"`
-	Username  string `mapstructure:"username"`
-	Password  string `mapstructure:"password"`
-	Method    string `mapstructure:"method"`
-	Fields    string `mapstructure:"fields"`    // 解析字段名，如 content
-	DateField string `mapstructure:"dateField"` // 日期字段，默认 @timestamp
-	Strip     string `mapstructure:"strip"`     // 正文事件前缀标识，识别并去掉头部，默认 用户事件记录===
+	URL         string `mapstructure:"url"`
+	Index       string `mapstructure:"index"`
+	Username    string `mapstructure:"username"`
+	Password    string `mapstructure:"password"`
+	QueryString string `mapstructure:"query_string"` // ES query_string，如 method:addEventLog
+	Fields      string `mapstructure:"fields"`       // 解析字段名，如 content
+	DateField   string `mapstructure:"dateField"`    // 日期字段，默认 @timestamp
+	Strip       string `mapstructure:"strip"`        // 正文事件前缀标识，识别并去掉头部，默认 用户事件记录===
 }
 
 // ParseField 返回实际使用的解析字段名
@@ -100,7 +100,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("server.addr", ":8080")
 	v.SetDefault("log.level", "off")
 	v.SetDefault("es.index", "ysh-ysh-app-info*")
-	v.SetDefault("es.method", "addEventLog")
+	v.SetDefault("es.query_string", "method:addEventLog")
 	v.SetDefault("es.fields", "content")
 	v.SetDefault("es.dateField", "@timestamp")
 	v.SetDefault("es.strip", "用户事件记录===")
@@ -135,7 +135,7 @@ func Load(path string) (*Config, error) {
 	keys := []string{
 		"server.addr",
 		"log.level",
-		"es.url", "es.index", "es.username", "es.password", "es.method",
+		"es.url", "es.index", "es.username", "es.password", "es.query_string",
 		"es.fields", "es.dateField", "es.strip",
 		"mysql.dsn", "mysql.host", "mysql.port", "mysql.user", "mysql.password", "mysql.database", "mysql.table",
 		"sync.interval", "sync.lag_seconds", "sync.max_size", "sync.batch_size", "sync.max_time", "sync.max_retry",
@@ -165,8 +165,8 @@ func (c *Config) normalize() {
 	if c.ES.Index == "" {
 		c.ES.Index = "ysh-ysh-app-info*"
 	}
-	if c.ES.Method == "" {
-		c.ES.Method = "addEventLog"
+	if c.ES.QueryString == "" {
+		c.ES.QueryString = "method:addEventLog"
 	}
 	if c.ES.DateField == "" {
 		c.ES.DateField = "@timestamp"
