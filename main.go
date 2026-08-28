@@ -18,6 +18,8 @@ import (
 
 func main() {
 	cfgPath := flag.String("c", "config/config.yaml", "配置文件路径（容器内默认 /config/config.yaml）")
+	port := flag.Int("p", 0, "HTTP 监听端口，覆盖配置 server.addr（也可用 -port）")
+	flag.IntVar(port, "port", 0, "HTTP 监听端口，同 -p")
 	flag.Parse()
 
 	cfg, _ := config.Load(*cfgPath)
@@ -55,6 +57,10 @@ func main() {
 	mgr.StartIncremental(ctx)
 
 	addr := cfg.Server.Addr
+	if *port > 0 {
+		addr = fmt.Sprintf(":%d", *port)
+		common.Info("命令行指定端口 port=%d，覆盖配置 addr=%s", *port, cfg.Server.Addr)
+	}
 	common.Info("HTTP 监听 %s  →  GET / | /monitor/sse | /health | /sync/backfill | /sync/compare", addr)
 
 	srv := &http.Server{Addr: addr, Handler: router.New(cfg, mgr)}
