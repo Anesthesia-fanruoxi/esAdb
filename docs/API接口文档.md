@@ -11,7 +11,8 @@
 | GET | `/health` | 健康检查 |
 | GET | `/monitor/sse` | SSE 实时监控流（增量 / 补全侧栏 / 接线图） |
 | GET | `/monitor/backfill/sse` | 补全详情弹框 SSE（约 1Hz，含 QPS / 运行时序列） |
-| POST / GET | `/sync/backfill` | 补全（历史回填）同步 |
+| GET | `/sync/compare/drilldown/sse` | 三级下钻 SSE（小时→分钟→10秒窗），定位异常时间窗 |
+| POST / GET | `/sync/backfill` | 补全（历史回填）：连续范围 或 按窗口列表 |
 | POST / GET | `/sync/compare` | ES 与 ADB 条数对比 |
 
 ---
@@ -191,22 +192,82 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 
 ---
 
-## 4. POST/GET /sync/backfill 补全同步
+## 4. GET /sync/compare/drilldown/sse 三级下钻（定位异常时间窗）
 
-按时间范围回填历史数据（并行）。`body` 与 query 参数二选一。
+对指定时间范围做 **小时 → 分钟 → 10秒窗** 三级下钻，定位 ES 与 ADB 条数不一致的异常时间窗。每级只对上一级的**异常父窗口**继续细分（避免全量下钻），多个异常父窗口的细分窗口合并到同一并行池中并行。常用于对比后仅差 1~2 条时，精准锁定误差时间点。
 
-**请求**
+**请求**（GET，query 参数）
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `start` | string | 是 | 范围开始（如 `2026-08-27 00:00:00`，也支持毫秒） |
+| `end` | string | 否 | 范围结束（缺省按当前 lag 边界推） |
+| `workers` | int | 否 | 并行线程，默认 12，按窗口数自动收敛 |
+| `l1` / `l2` / `l3` | int | 否 | 各级粒度（秒），默认 `3600 / 60 / 10` |
+
+SSE 事件：`range` → 逐级 `level1` / `level2` / `level3` → `done`（或 `error`）。
+
+**range / level1**
+
+```json
+event: range
+{ "startMs": 1756281600000, "endMs": 1756342400000, "start": "...", "end": "..." }
+
+event: level1
+{
+  "level": 1, "levelMs": 3600000, "total": 24, "abnormal": 1,
+  "windows": [
+    { "range": { "startMs": 1756281600000, "endMs": 1756285200000, "start": "...", "end": "..." },
+      "es": { "count": 3600 }, "mysql": { "count": 3599 }, "diff": 1, "match": false }
+  ]
+}
+```
+
+`level2` / `level3` 结构相同，`windows` 为该级定位到的异常窗口（`CompareResult`）；`total` 为该级实际检查窗口数，`abnormal` 为计数不符数。
+
+**done**：`{ "abnormal": N }`，`N` 为最末一级（level3）的异常窗口数。
+
+> 异常口径：窗口内 ES 命中数 ≠ ADB 已写入（`es_timestamp`）数量即视为异常，不区分多少方向。
+
+**与补全衔接（补全按钮）**：取最末切粒度的 `event.level3` 里 `windows[]` 的 `range.startMs/endMs`，组装成数组后 POST `/sync/backfill` 的 `windows` 字段即可只回补这些异常窗口（见第 5 章）。
+
+---
+
+## 5. POST/GET /sync/backfill 补全同步
+
+按时间范围回填历史数据（并行）。支持两种入参（二选一）：
+
+1. **连续范围**：`{ start, end }`（`end` 可缺省，内部按 `sync.interval` 切窗）
+2. **按窗口列表**（不连续，用于补全三级下钻定位的异常窗口）：`{ windows:[{startMs,endMs}] }`
+
+`body` 与 query 参数二选一。
+
+**请求（按窗口列表补全）**
+
+```json
+{ "windows": [ { "startMs": 1756282000000, "endMs": 1756282010000 }, { "startMs": 1756282060000, "endMs": 1756282070000 } ] }
+```
+
+**请求（连续范围补全）**
 
 ```json
 { "start": "2026-08-27 00:00:00", "end": "2026-08-27 17:00:00" }
 ```
+
+**连续范围模式参数**（此时请求体/query 含 `start`，不使用 `windows`）
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `start` | 是 | 起始时间，支持毫秒时间戳 或 `"2006-01-02 15:04:05"` 等 |
 | `end` | 否 | 结束时间；留空则截止到当前 lag 边界 |
 
-**响应 data**
+**窗口列表模式参数**（此时请求体含 `windows`，不使用 `start/end`）
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `windows` | 是 | 窗口数组 `[{startMs,endMs}]`，去重/排序后直接回补，单次 ≤ 4000 |
+
+**响应 data（连续范围模式含 `plan`；窗口列表模式无 `plan`，多返回 `windows` 数量）**
 
 ```json
 {
@@ -219,7 +280,7 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
     "windows": [ "TimeRangeMs..." ],
     "totalWindows": 5758
   },
-    "summary": {
+  "summary": {
     "totalWindows": 5758, "workers": 2,
     "totalHits": 123456, "totalWritten": 123450, "failed": 0,
     "windows": [ { "window": {...}, "hits": 12, "written": 12, "error": "" } ]
@@ -229,7 +290,7 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 
 ---
 
-## 5. POST/GET /sync/compare 数据对比
+## 6. POST/GET /sync/compare 数据对比
 
 对比一个时间范围内 ES 与 ADB（`es_timestamp`）的条数差异。
 
@@ -261,13 +322,13 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 
 ---
 
-## 6. 通用响应说明
+## 7. 通用响应说明
 
 - 成功：`code=0`
 - 失败：`code` 为非 0 业务码，`message` 说明原因，HTTP 状态码为 400/404/405/500/503 等
 - JSON 序列化不转义 `& < >`
 
-## 7. 页面与 SSE 消费示例
+## 8. 页面与 SSE 消费示例
 
 前端页面 `GET /`：
 

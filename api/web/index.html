@@ -446,6 +446,20 @@
     .compare-grid .num.diff-pos { color: var(--red); }
     .compare-grid .lbl { font-size: .66rem; color: var(--faint); margin-top: 2px; }
 
+    /* 精准分析 */
+    .an-windows { margin-top: 9px; display: flex; flex-direction: column; gap: 6px; }
+    .an-sec { font-size: .68rem; color: var(--faint); font-weight: 650; margin-top: 2px; }
+    .an-win {
+      display: flex; align-items: center; gap: 8px;
+      background: #f8fafb; border: 1px solid var(--border-soft);
+      border-radius: 8px; padding: 5px 9px; font-size: .74rem;
+    }
+    .an-win .t { flex: 1; min-width: 0; font-family: "SFMono-Regular", Consolas, monospace; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .an-win .c { flex-shrink: 0; color: var(--muted); }
+    .an-win .c b { color: var(--red); }
+    .an-win button { flex-shrink: 0; padding: 3px 10px; font-size: .7rem; }
+
     /* 服务状态 */
     .rt-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; }
     .rt-grid .cell {
@@ -625,6 +639,20 @@
               <div><div class="num" id="cmpDiff">-</div><div class="lbl">差异</div></div>
             </div>
             <p class="info" id="cmpRange" style="font-size:.72rem;color:var(--muted);margin-top:8px"></p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>精准分析</h2><span class="tag" id="anStatus">空闲</span></div>
+          <div class="card-body">
+            <div class="form-row">
+              <label>开始<input type="text" id="anStart" placeholder="2026-08-27 00:00:00" /></label>
+              <label>结束<input type="text" id="anEnd" placeholder="默认 lag 边界" /></label>
+              <button class="btn btn-primary" id="btnAnalyze" onclick="doAnalyze()">分析</button>
+            </div>
+            <p class="hint">三级下钻：逐级 小时→分钟→10秒，仅展开异常窗口</p>
+            <div class="result" id="anProg">等待分析...</div>
+            <div class="an-windows" id="anWindows"></div>
           </div>
         </div>
 
@@ -1264,6 +1292,102 @@
       } finally {
         btn.disabled = false;
       }
+    }
+
+    /* ================= 精准分析（三级下钻） ================= */
+    let anEs = null;
+    const anLevel = { 1: ['1h', '异常小时', '正在按小时分析...'], 2: ['1m', '异常分钟', '正在对异常小时细化到分钟...'], 3: ['10s', '异常10秒窗', '正在对异常分钟细化到10秒窗...'] };
+    function anTag(v) { const el = document.getElementById('anStatus'); el.textContent = v; }
+    function anProg(t, cls) {
+      const el = document.getElementById('anProg');
+      el.className = 'result' + (cls ? ' ' + cls : '');
+      el.textContent = t;
+    }
+    function fmtAnRange(r) {
+      const s = String(r.start || '').slice(0, 19), e = String(r.end || '').slice(11, 19);
+      return s + ' ~ ' + e;
+    }
+    function renderAnLevel(lv) {
+      const box = document.getElementById('anWindows');
+      const sec = document.createElement('div');
+      sec.className = 'an-sec';
+      sec.textContent = `第${lv.level}级 · ${anLevel[lv.level][1]} · 检查 ${lv.total} 窗口 · 异常 ${lv.abnormal}`;
+      box.appendChild(sec);
+      (lv.windows || []).forEach(w => {
+        const row = document.createElement('div');
+        row.className = 'an-win';
+        const t = document.createElement('span'); t.className = 't';
+        t.textContent = fmtAnRange(w.range) + '  ' + lv.level + '-' + anLevel[lv.level][0];
+        row.appendChild(t);
+        const c = document.createElement('span'); c.className = 'c';
+        c.innerHTML = 'ES <b>' + (w.es && w.es.count) + '</b> · ADB ' + (w.mysql && w.mysql.count);
+        row.appendChild(c);
+        if (lv.level === 3) {
+          const b = document.createElement('button');
+          b.className = 'btn btn-primary';
+          b.textContent = '补全此窗口';
+          b.onclick = () => backfillWindow([{ startMs: w.range.startMs, endMs: w.range.endMs }]);
+          row.appendChild(b);
+        }
+        box.appendChild(row);
+      });
+      anProg(anLevel[lv.level][2]);
+    }
+    async function backfillWindow(windows) {
+      anProg('正在回补 ' + windows.length + ' 个异常窗口...');
+      log('[精准分析] 补全 ' + windows.length + ' 个异常窗口');
+      try {
+        const resp = await apiPost('/sync/backfill', { windows });
+        if (resp.code !== 0) { anProg('补全失败: ' + resp.message, 'fail'); log('[补全] 失败: ' + resp.message, true); return; }
+        const s = resp.data.summary;
+        anProg('补全完成 · hits ' + s.totalHits + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed, 'ok');
+        log('[补全] 完成 hits=' + s.totalHits + ' written=' + s.totalWritten);
+      } catch (e) { anProg('请求失败: ' + e.message, 'fail'); log('[补全] 请求失败', true); }
+    }
+    function doAnalyze() {
+      const start = document.getElementById('anStart').value.trim();
+      const end = document.getElementById('anEnd').value.trim();
+      if (!start) { alert('请填写开始时间'); return; }
+      if (anEs) { try { anEs.close(); } catch (_) {} }
+      document.getElementById('anWindows').innerHTML = '';
+      const btn = document.getElementById('btnAnalyze');
+      btn.disabled = true;
+      anTag('分析中');
+      anProg('已连接，正在按时段计算...（逐级 小时→分钟→10秒）');
+      log('[精准分析] 开始 ' + start + (end ? ' ~ ' + end : ''));
+      const qs = '?start=' + encodeURIComponent(start) + (end ? '&end=' + encodeURIComponent(end) : '');
+      anEs = new EventSource('/sync/compare/drilldown/sse' + qs);
+      anEs.addEventListener('range', () => anProg(anLevel[1][2]));
+      anEs.addEventListener('level1', e => renderAnLevel(JSON.parse(e.data)));
+      anEs.addEventListener('level2', e => renderAnLevel(JSON.parse(e.data)));
+      anEs.addEventListener('level3', e => renderAnLevel(JSON.parse(e.data)));
+      anEs.addEventListener('done', e => {
+        const d = JSON.parse(e.data);
+        anTag('完成');
+        anProg(d.abnormal === 0 ? '分析完成 · 未发现异常窗口 ✓' : '分析完成 · 共定位 ' + d.abnormal + ' 个异常窗口', 'ok');
+        log('[精准分析] 完成 异常窗口=' + d.abnormal);
+        try { anEs.close(); } catch (_) {}
+        anEs = null;
+        btn.disabled = false;
+      });
+      anEs.addEventListener('error', e => {
+        let msg = '';
+        try { msg = (JSON.parse(e.data) || {}).message || ''; } catch (_) {}
+        anTag('失败');
+        anProg(msg ? '分析失败: ' + msg : '分析失败', 'fail');
+        log('[精准分析] 失败: ' + (msg || '未知错误'), true);
+        try { anEs.close(); } catch (_) {}
+        anEs = null;
+        btn.disabled = false;
+      });
+      anEs.onerror = function () {
+        if (!anEs) return; // done/error 已关闭，忽略正常结束
+        try { anEs.close(); } catch (_) {}
+        anEs = null;
+        btn.disabled = false;
+        anTag('中断');
+        anProg('分析流中断，已停止（可重试）', 'fail');
+      };
     }
 
     /* ================= 服务状态 runtime ================= */

@@ -23,6 +23,7 @@ func New(cfg *config.Config, mgr *store.Manager) http.Handler {
 	})
 	mux.HandleFunc("/sync/backfill", syncAPI.HandleBackfill)
 	mux.HandleFunc("/sync/compare", syncAPI.HandleCompare)
+	mux.HandleFunc("/sync/compare/drilldown/sse", syncAPI.HandleCompareDrilldownSSE)
 
 	return mux
 }
