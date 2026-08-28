@@ -109,3 +109,55 @@ func (a *MonitorAPI) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+// HandleBackfillSSE GET /monitor/backfill/sse  补全详情（打开弹框时连接，1s 推送）
+func (a *MonitorAPI) HandleBackfillSSE(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		common.WriteFail(w, http.StatusMethodNotAllowed, 405, "仅支持 GET")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		common.WriteFail(w, http.StatusInternalServerError, 500, "不支持 SSE")
+		return
+	}
+	if a.mgr == nil || a.mgr.Monitor == nil {
+		common.WriteFail(w, http.StatusServiceUnavailable, 503, "监控未就绪")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	send := func(event string, data interface{}) error {
+		b, err := common.MarshalJSON(data, false)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
+	if err := send("snapshot", a.mgr.Monitor.BuildBackfillDetail()); err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := send("detail", a.mgr.Monitor.BuildBackfillDetail()); err != nil {
+				return
+			}
+		}
+	}
+}

@@ -61,7 +61,7 @@ func main() {
 		addr = fmt.Sprintf(":%d", *port)
 		common.Info("命令行指定端口 port=%d，覆盖配置 addr=%s", *port, cfg.Server.Addr)
 	}
-	common.Info("HTTP 监听 %s  →  GET / | /monitor/sse | /health | /sync/backfill | /sync/compare", addr)
+	common.Info("HTTP 监听 %s  →  GET / | /monitor/sse | /monitor/backfill/sse | /health | /sync/backfill | /sync/compare", addr)
 
 	srv := &http.Server{Addr: addr, Handler: router.New(cfg, mgr)}
 	go func() {

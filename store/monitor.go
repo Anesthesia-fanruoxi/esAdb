@@ -1,13 +1,17 @@
 package store
 
 import (
+	"runtime"
 	"sync"
 	"time"
 
 	"esAdb/common"
 )
 
-const monitorRetention = time.Hour
+const (
+	monitorRetention = time.Hour
+	sessionQpsMax    = 600 // 本次补全 QPS 序列上限
+)
 
 // IncrementalPoint 单次增量同步记录
 type IncrementalPoint struct {
@@ -32,7 +36,7 @@ type BackfillWindowPoint struct {
 	Error   string             `json:"error,omitempty"`
 }
 
-// BackfillProgressPoint 补全进度快照
+// BackfillProgressPoint 补全进度快照（主页 SSE / 侧栏）
 type BackfillProgressPoint struct {
 	At           int64   `json:"at"`
 	AtStr        string  `json:"atStr"`
@@ -46,6 +50,45 @@ type BackfillProgressPoint struct {
 	RangeEnd     string  `json:"rangeEnd,omitempty"`
 }
 
+// QpsPoint 本次补全会话每秒 QPS 采样点
+type QpsPoint struct {
+	At        int64   `json:"at"`
+	AtStr     string  `json:"atStr"`
+	WriteQPS  float64 `json:"writeQps"`
+	WindowQPS float64 `json:"windowQps"`
+	HitQPS    float64 `json:"hitQps"`
+}
+
+// RuntimePoint 本次补全会话服务运行时序列点
+type RuntimePoint struct {
+	At            int64   `json:"at"`
+	AtStr         string  `json:"atStr"`
+	HeapAllocMB   float64 `json:"heapAllocMB"`
+	HeapSysMB     float64 `json:"heapSysMB"`
+	SysMB         float64 `json:"sysMB"`
+	NumGoroutine  int     `json:"numGoroutine"`
+	NumGC         uint32  `json:"numGC"`
+}
+
+// BackfillSessionMeta 本次补全会话元信息（详情弹框「本次进度」）
+type BackfillSessionMeta struct {
+	StartedAtMs   int64              `json:"startedAtMs"`
+	StartedAtStr  string             `json:"startedAtStr"`
+	FinishedAtMs  int64              `json:"finishedAtMs,omitempty"`
+	FinishedAtStr string             `json:"finishedAtStr,omitempty"`
+	FirstWindow   common.TimeRangeMs `json:"firstWindow,omitempty"`
+	LastWindow    common.TimeRangeMs `json:"lastWindow,omitempty"`
+}
+
+// BackfillDetail 详情 SSE 载荷（GET /monitor/backfill/sse）
+type BackfillDetail struct {
+	BackfillActive bool                   `json:"backfillActive"`
+	Progress       *BackfillProgressPoint `json:"progress"`
+	Session        BackfillSessionMeta    `json:"session"`
+	QpsSeries      []QpsPoint             `json:"qpsSeries"`
+	RuntimeSeries  []RuntimePoint         `json:"runtimeSeries"`
+}
+
 // PipelineSnapshot 接线图实时状态
 type PipelineSnapshot struct {
 	At                 int64                  `json:"at"`
@@ -55,6 +98,10 @@ type PipelineSnapshot struct {
 	IncrementalRunning bool                   `json:"incrementalRunning"`
 	IntervalSec        int                    `json:"intervalSec"`
 	LagSec             int                    `json:"lagSec"`
+	BackfillWorkers    int                    `json:"backfillWorkers"`
+	BackfillPauseMs    int                    `json:"backfillPauseMs"`
+	NumGoroutine       int                    `json:"numGoroutine"`
+	HeapAllocMB        float64                `json:"heapAllocMB"`
 	TargetWindow       *common.TimeRangeMs    `json:"targetWindow,omitempty"`
 	LastIncremental    *IncrementalPoint      `json:"lastIncremental,omitempty"`
 	BackfillActive     bool                   `json:"backfillActive"`
@@ -87,9 +134,19 @@ type Monitor struct {
 	incremental      []IncrementalPoint
 	backfillProgress []BackfillProgressPoint
 	backfillWindows  []BackfillWindowPoint
+	sessionQps       []QpsPoint
+	sessionRuntime   []RuntimePoint
+	qpsSampleAt      time.Time
+	qpsSampleDone    int
+	qpsSampleHits    int
+	qpsSampleWritten int
+	sessionFirstWin  common.TimeRangeMs
+	sessionLastWin   common.TimeRangeMs
+	sessionFinished  time.Time
 	lastIncremental  *IncrementalPoint
 	backfillActive   bool
 	currentBackfill  *BackfillProgressPoint
+	backfillStarted  time.Time
 
 	jobCh  chan monitorJob
 	subsMu sync.RWMutex
@@ -219,23 +276,58 @@ func (mon *Monitor) History() MonitorHistory {
 	}
 }
 
+type pipelineSvc struct {
+	EsReady            bool
+	MysqlReady         bool
+	IncrementalRunning bool
+	IntervalSec        int
+	LagSec             int
+	BackfillWorkers    int
+	BackfillPauseMs    int
+	NumGoroutine       int
+	HeapAllocMB        float64
+}
+
+func (mon *Monitor) pipelineSvc() pipelineSvc {
+	svc := pipelineSvc{NumGoroutine: runtime.NumGoroutine()}
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	svc.HeapAllocMB = round1(float64(ms.Alloc) / (1 << 20))
+	if mon.mgr != nil {
+		svc.EsReady = mon.mgr.ES != nil
+		svc.MysqlReady = mon.mgr.MySQL != nil
+		if mon.mgr.cfg != nil {
+			svc.IntervalSec = mon.mgr.cfg.Sync.Interval
+			svc.LagSec = mon.mgr.cfg.Sync.LagSeconds
+			svc.BackfillWorkers = mon.mgr.cfg.Sync.BackfillWorkers
+			svc.BackfillPauseMs = mon.mgr.cfg.Sync.BackfillPauseMs
+		}
+		if mon.mgr.Syncer != nil {
+			svc.IncrementalRunning = mon.mgr.Syncer.incrRunning
+		}
+	}
+	return svc
+}
+
 // Pipeline 当前接线图状态
 func (mon *Monitor) Pipeline() PipelineSnapshot {
 	now := time.Now()
+	svc := mon.pipelineSvc()
 	snap := PipelineSnapshot{
-		At:    now.UnixMilli(),
-		AtStr: common.FormatMs(now.UnixMilli()),
+		At:                 now.UnixMilli(),
+		AtStr:              common.FormatMs(now.UnixMilli()),
+		EsReady:            svc.EsReady,
+		MysqlReady:         svc.MysqlReady,
+		IncrementalRunning: svc.IncrementalRunning,
+		IntervalSec:        svc.IntervalSec,
+		LagSec:             svc.LagSec,
+		BackfillWorkers:    svc.BackfillWorkers,
+		BackfillPauseMs:    svc.BackfillPauseMs,
+		NumGoroutine:       svc.NumGoroutine,
+		HeapAllocMB:        svc.HeapAllocMB,
 	}
+
 	if mon.mgr != nil {
-		snap.EsReady = mon.mgr.ES != nil
-		snap.MysqlReady = mon.mgr.MySQL != nil
-		if mon.mgr.cfg != nil {
-			snap.IntervalSec = mon.mgr.cfg.Sync.Interval
-			snap.LagSec = mon.mgr.cfg.Sync.LagSeconds
-		}
-		if mon.mgr.Syncer != nil {
-			snap.IncrementalRunning = mon.mgr.Syncer.incrRunning
-		}
 		win := common.IncrementalWindow(now, snap.IntervalSec, snap.LagSec)
 		snap.TargetWindow = &win
 	}
@@ -251,6 +343,114 @@ func (mon *Monitor) Pipeline() PipelineSnapshot {
 	}
 	mon.mu.RUnlock()
 	return snap
+}
+
+// BuildBackfillDetail 组装补全详情 SSE 载荷（弹框 SSE 约 1Hz 采样 QPS 与服务指标）
+func (mon *Monitor) BuildBackfillDetail() BackfillDetail {
+	mon.mu.Lock()
+	mon.appendSessionSamplesLocked()
+	qps := append([]QpsPoint(nil), mon.sessionQps...)
+	runtimeSeries := append([]RuntimePoint(nil), mon.sessionRuntime...)
+	var progress *BackfillProgressPoint
+	if mon.currentBackfill != nil {
+		c := *mon.currentBackfill
+		progress = &c
+	}
+	backfillActive := mon.backfillActive
+	session := mon.buildSessionMetaLocked()
+	mon.mu.Unlock()
+
+	return BackfillDetail{
+		BackfillActive: backfillActive,
+		Progress:       progress,
+		Session:        session,
+		QpsSeries:      qps,
+		RuntimeSeries:  runtimeSeries,
+	}
+}
+
+func (mon *Monitor) buildSessionMetaLocked() BackfillSessionMeta {
+	meta := BackfillSessionMeta{}
+	if !mon.backfillStarted.IsZero() {
+		meta.StartedAtMs = mon.backfillStarted.UnixMilli()
+		meta.StartedAtStr = common.FormatMs(meta.StartedAtMs)
+	}
+	if !mon.sessionFinished.IsZero() {
+		meta.FinishedAtMs = mon.sessionFinished.UnixMilli()
+		meta.FinishedAtStr = common.FormatMs(meta.FinishedAtMs)
+	}
+	if mon.sessionFirstWin.Start != "" {
+		meta.FirstWindow = mon.sessionFirstWin
+	}
+	if mon.sessionLastWin.Start != "" {
+		meta.LastWindow = mon.sessionLastWin
+	}
+	return meta
+}
+
+func (mon *Monitor) appendSessionSamplesLocked() {
+	now := time.Now()
+	at := now.UnixMilli()
+	if n := len(mon.sessionRuntime); n > 0 && at-mon.sessionRuntime[n-1].At < 800 {
+		return
+	}
+
+	var writeQps, hitQps, windowQps float64
+	if mon.currentBackfill != nil {
+		done := mon.currentBackfill.Completed + mon.currentBackfill.Failed
+		hits := mon.currentBackfill.TotalHits
+		written := mon.currentBackfill.TotalWritten
+		if !mon.qpsSampleAt.IsZero() {
+			sec := now.Sub(mon.qpsSampleAt).Seconds()
+			if sec < 0.001 {
+				sec = 0.001
+			}
+			dDone := done - mon.qpsSampleDone
+			dHits := hits - mon.qpsSampleHits
+			dWrt := written - mon.qpsSampleWritten
+			if dDone < 0 {
+				dDone = 0
+			}
+			if dHits < 0 {
+				dHits = 0
+			}
+			if dWrt < 0 {
+				dWrt = 0
+			}
+			writeQps = round1(float64(dWrt) / sec)
+			hitQps = round1(float64(dHits) / sec)
+			windowQps = round1(float64(dDone) / sec)
+		}
+		mon.qpsSampleAt = now
+		mon.qpsSampleDone = done
+		mon.qpsSampleHits = hits
+		mon.qpsSampleWritten = written
+	}
+	mon.sessionQps = append(mon.sessionQps, QpsPoint{
+		At:        at,
+		AtStr:     common.FormatMs(at),
+		WriteQPS:  writeQps,
+		WindowQPS: windowQps,
+		HitQPS:    hitQps,
+	})
+	if len(mon.sessionQps) > sessionQpsMax {
+		mon.sessionQps = mon.sessionQps[len(mon.sessionQps)-sessionQpsMax:]
+	}
+
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	mon.sessionRuntime = append(mon.sessionRuntime, RuntimePoint{
+		At:           at,
+		AtStr:        common.FormatMs(at),
+		HeapAllocMB:  round1(float64(ms.Alloc) / (1 << 20)),
+		HeapSysMB:    round1(float64(ms.HeapSys) / (1 << 20)),
+		SysMB:        round1(float64(ms.Sys) / (1 << 20)),
+		NumGoroutine: runtime.NumGoroutine(),
+		NumGC:        ms.NumGC,
+	})
+	if len(mon.sessionRuntime) > sessionQpsMax {
+		mon.sessionRuntime = mon.sessionRuntime[len(mon.sessionRuntime)-sessionQpsMax:]
+	}
 }
 
 // RecordIncremental 记录增量写入（异步）
@@ -284,7 +484,7 @@ func (mon *Monitor) RecordIncremental(win common.TimeRangeMs, hits, written int,
 }
 
 // BeginBackfill 补全开始
-func (mon *Monitor) BeginBackfill(rangeStart, rangeEnd string, totalWindows int) {
+func (mon *Monitor) BeginBackfill(rangeStart, rangeEnd string, totalWindows int, firstWin, lastWin common.TimeRangeMs) {
 	if mon == nil {
 		return
 	}
@@ -299,6 +499,16 @@ func (mon *Monitor) BeginBackfill(rangeStart, rangeEnd string, totalWindows int)
 		}
 		mon.mu.Lock()
 		mon.backfillActive = true
+		mon.backfillStarted = now
+		mon.sessionFinished = time.Time{}
+		mon.sessionQps = mon.sessionQps[:0]
+		mon.sessionRuntime = mon.sessionRuntime[:0]
+		mon.qpsSampleAt = time.Time{}
+		mon.qpsSampleDone = 0
+		mon.qpsSampleHits = 0
+		mon.qpsSampleWritten = 0
+		mon.sessionFirstWin = firstWin
+		mon.sessionLastWin = lastWin
 		mon.currentBackfill = &pt
 		mon.backfillProgress = append(mon.backfillProgress, pt)
 		mon.mu.Unlock()
@@ -340,14 +550,15 @@ func (mon *Monitor) UpdateBackfillProgress(completed, failed, totalHits, totalWr
 	}
 	mon.enqueue(func() {
 		now := time.Now()
-		pending := totalWindows
+		done := completed + failed
 		var pct float64
-		if pending > 0 {
-			pct = float64(completed+failed) / float64(pending) * 100
+		if totalWindows > 0 {
+			pct = float64(done) / float64(totalWindows) * 100
 		}
 		if pct > 100 {
 			pct = 100
 		}
+
 		pt := BackfillProgressPoint{
 			At:           now.UnixMilli(),
 			AtStr:        common.FormatMs(now.UnixMilli()),
@@ -361,13 +572,21 @@ func (mon *Monitor) UpdateBackfillProgress(completed, failed, totalHits, totalWr
 			RangeEnd:     rangeEnd,
 		}
 		mon.mu.Lock()
+		if mon.backfillStarted.IsZero() {
+			mon.backfillStarted = now
+		}
 		mon.currentBackfill = &pt
 		mon.backfillProgress = append(mon.backfillProgress, pt)
 		mon.mu.Unlock()
+
 		mon.prune(now)
 		mon.broadcast(SSEMessage{Event: "backfill", Data: pt})
 		mon.broadcast(SSEMessage{Event: "pipeline", Data: mon.Pipeline()})
 	})
+}
+
+func round1(v float64) float64 {
+	return float64(int(v*10+0.5)) / 10
 }
 
 // EndBackfill 补全结束
@@ -376,8 +595,12 @@ func (mon *Monitor) EndBackfill() {
 		return
 	}
 	mon.enqueue(func() {
+		now := time.Now()
 		mon.mu.Lock()
 		mon.backfillActive = false
+		if !mon.backfillStarted.IsZero() {
+			mon.sessionFinished = now
+		}
 		mon.mu.Unlock()
 		mon.broadcast(SSEMessage{Event: "pipeline", Data: mon.Pipeline()})
 	})

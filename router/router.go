@@ -17,6 +17,7 @@ func New(cfg *config.Config, mgr *store.Manager) http.Handler {
 
 	mux.HandleFunc("/", monitorAPI.HandleIndex)
 	mux.HandleFunc("/monitor/sse", monitorAPI.HandleSSE)
+	mux.HandleFunc("/monitor/backfill/sse", monitorAPI.HandleBackfillSSE)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		common.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

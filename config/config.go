@@ -67,14 +67,16 @@ type MySQLConfig struct {
 }
 
 type SyncConfig struct {
-	Interval      int `mapstructure:"interval"`        // 同步窗口（秒）
-	LagSeconds    int `mapstructure:"lag_seconds"`      // ES 写入延迟补偿（秒），默认 60
-	MaxSize       int `mapstructure:"max_size"`         // ES 单窗口最大拉取条数
-	BatchSize     int `mapstructure:"batch_size"`       // ADB 单条 REPLACE 最大行数，默认与 max_size 一致
-	MaxTime       int `mapstructure:"max_time"`         // 同步最大时间（秒）
-	MaxRetry      int `mapstructure:"max_retry"`        // 最大重试次数
-	RetryDelay    int `mapstructure:"retry_delay"`      // 重试延迟（秒）
-	RetryDelayMax int `mapstructure:"retry_delay_max"`  // 重试最大延迟（秒）
+	Interval         int `mapstructure:"interval"`           // 同步窗口（秒）
+	LagSeconds       int `mapstructure:"lag_seconds"`        // ES 写入延迟补偿（秒），默认 60
+	MaxSize          int `mapstructure:"max_size"`           // ES 单窗口最大拉取条数
+	BatchSize        int `mapstructure:"batch_size"`         // ADB 单条 REPLACE 最大行数，默认与 max_size 一致
+	MaxTime          int `mapstructure:"max_time"`           // 同步最大时间（秒）
+	MaxRetry         int `mapstructure:"max_retry"`          // 最大重试次数
+	RetryDelay       int `mapstructure:"retry_delay"`        // 重试延迟（秒）
+	RetryDelayMax    int `mapstructure:"retry_delay_max"`    // 重试最大延迟（秒）
+	BackfillWorkers  int `mapstructure:"backfill_workers"`   // 补全并行 worker 数，默认 2（限流，避免打满）
+	BackfillPauseMs  int `mapstructure:"backfill_pause_ms"`  // 每个窗口完成后暂停毫秒，默认 50；0=不停
 }
 
 var global *Config
@@ -114,6 +116,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("sync.max_retry", 3)
 	v.SetDefault("sync.retry_delay", 1)
 	v.SetDefault("sync.retry_delay_max", 10)
+	v.SetDefault("sync.backfill_workers", 2)
+	v.SetDefault("sync.backfill_pause_ms", 50)
 
 	cfg := &Config{}
 	if path == "" {
@@ -139,7 +143,7 @@ func Load(path string) (*Config, error) {
 		"es.fields", "es.dateField", "es.strip",
 		"mysql.dsn", "mysql.host", "mysql.port", "mysql.user", "mysql.password", "mysql.database", "mysql.table",
 		"sync.interval", "sync.lag_seconds", "sync.max_size", "sync.batch_size", "sync.max_time", "sync.max_retry",
-		"sync.retry_delay", "sync.retry_delay_max",
+		"sync.retry_delay", "sync.retry_delay_max", "sync.backfill_workers", "sync.backfill_pause_ms",
 	}
 	for _, k := range keys {
 		_ = v.BindEnv(k)
@@ -200,6 +204,12 @@ func (c *Config) normalize() {
 	}
 	if c.Sync.RetryDelayMax <= 0 {
 		c.Sync.RetryDelayMax = 10
+	}
+	if c.Sync.BackfillWorkers <= 0 {
+		c.Sync.BackfillWorkers = 2
+	}
+	if c.Sync.BackfillPauseMs < 0 {
+		c.Sync.BackfillPauseMs = 50
 	}
 	if c.MySQL.DSN == "" && c.MySQL.Host != "" && c.MySQL.User != "" && c.MySQL.Database != "" {
 		c.MySQL.DSN = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",

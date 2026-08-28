@@ -119,15 +119,22 @@ func (m *Manager) BackfillWindows(windows []common.TimeRangeMs, rangeStart, rang
 	}
 
 	if m.Monitor != nil {
-		m.Monitor.BeginBackfill(rangeStart, rangeEnd, len(windows))
+		first := windows[0]
+		last := windows[len(windows)-1]
+		m.Monitor.BeginBackfill(rangeStart, rangeEnd, len(windows), first, last)
 		defer m.Monitor.EndBackfill()
 	}
 
-	workers := runtime.NumCPU()
-	if workers < 1 {
-		workers = 1
+	workers := m.cfg.Sync.BackfillWorkers
+	if workers <= 0 {
+		workers = 2
+	}
+	if n := runtime.NumCPU(); workers > n && n > 0 {
+		workers = n
 	}
 	summary.Workers = workers
+	pause := time.Duration(m.cfg.Sync.BackfillPauseMs) * time.Millisecond
+	common.Info("[backfill] workers=%d pause=%v totalWindows=%d", workers, pause, len(windows))
 
 	ch := make(chan common.TimeRangeMs, len(windows))
 	for _, w := range windows {
@@ -180,6 +187,11 @@ func (m *Manager) BackfillWindows(windows []common.TimeRangeMs, rangeStart, rang
 					if shouldUpdate {
 						m.Monitor.UpdateBackfillProgress(c, f, h, w, total, rangeStart, rangeEnd)
 					}
+				}
+
+				// 窗口间隔，降低对 ES/ADB/本机的持续压力
+				if pause > 0 {
+					time.Sleep(pause)
 				}
 			}
 		}()

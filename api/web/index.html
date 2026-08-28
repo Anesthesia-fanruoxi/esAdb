@@ -237,10 +237,152 @@
       color: var(--faint); font-size: .78rem;
     }
 
+    /* ---------- 补全详情弹框 ---------- */
+    .modal-mask {
+      display: none;
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(15, 23, 42, .45);
+      align-items: center; justify-content: center;
+      padding: 3vh 3vw;
+    }
+    .modal-mask.open { display: flex; }
+    .modal {
+      width: min(96vw, 1180px);
+      height: min(92vh, 780px);
+      background: var(--surface);
+      border-radius: 14px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.25);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--border-soft);
+    }
+    .modal-head {
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .modal-head h3 { font-size: 1rem; font-weight: 650; }
+    .modal-close {
+      border: none; background: var(--border-soft); color: var(--muted);
+      width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 1.1rem;
+    }
+    .modal-close:hover { background: var(--border); color: var(--text); }
+    .modal-body {
+      flex: 1; min-height: 0;
+      overflow: hidden;
+      padding: 12px 16px 14px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .bf-modal-layout { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+    .bf-overview {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px 14px;
+      background: linear-gradient(180deg, #eef7f8, #fafdfd);
+      border: 1px solid var(--border-soft);
+      border-radius: 10px;
+    }
+    .bf-progress-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 10px; min-width: 0;
+    }
+    .bf-progress-head .bf-sec-label { margin-bottom: 0; }
+    .bf-progress-pct {
+      font-size: 1.55rem; font-weight: 750; color: var(--accent);
+      line-height: 1; letter-spacing: -.02em; white-space: nowrap;
+    }
+    .modal .bar-lg { height: 10px; margin: 0; cursor: default; }
+    .bf-progress-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+      min-width: 0;
+    }
+    .bf-progress-grid .cell {
+      background: #fff;
+      border: 1px solid var(--border-soft);
+      border-radius: 8px;
+      padding: 8px 10px;
+      min-width: 0;
+    }
+    .bf-progress-grid .l { font-size: .66rem; color: var(--faint); margin-bottom: 3px; }
+    .bf-progress-grid .v {
+      font-size: .82rem; font-weight: 650; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .bf-subhead {
+      flex-shrink: 0;
+      font-size: .72rem; font-weight: 650; color: var(--muted);
+      padding-left: 2px;
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    .bf-subhead::before {
+      content: ""; align-self: center;
+      width: 10px; height: 10px; border-radius: 3px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2, var(--accent)));
+    }
+    .bf-subhead-hint { font-weight: 400; color: var(--faint); font-size: .64rem; }
+    .bf-charts {
+      flex: 1; min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) repeat(2, minmax(0, 1fr));
+      grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 8px;
+    }
+    .bf-chart-qps {
+      grid-column: 1; grid-row: 1 / 3;
+      display: flex; flex-direction: column; min-height: 0; min-width: 0;
+    }
+    .bf-sec-label {
+      flex-shrink: 0;
+      font-size: .72rem; color: var(--muted); font-weight: 650;
+      margin-bottom: 4px;
+    }
+    .modal-chart-cell { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+    .modal-chart-cell h4 {
+      flex-shrink: 0;
+      font-size: .68rem; color: var(--muted); font-weight: 650;
+      margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .modal-chart-legend {
+      font-weight: 400; color: var(--faint); margin-left: 4px; font-size: .62rem;
+    }
+    .modal-chart-legend i {
+      display: inline-block; width: 10px; height: 2px;
+      vertical-align: middle; margin: 0 2px 0 6px;
+    }
+    .modal-chart-stage {
+      flex: 1; min-height: 0;
+      position: relative;
+      background: #f8fafb;
+      border-radius: 7px;
+      border: 1px solid var(--border-soft);
+    }
+    .modal-chart-stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .modal .bar-lg:hover { box-shadow: none; }
+    @media (max-width: 860px) {
+      .bf-progress-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .bf-charts {
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: minmax(120px, 1fr) repeat(2, minmax(90px, 1fr));
+      }
+      .bf-chart-qps { grid-column: 1 / 3; grid-row: 1; }
+    }
+    .modal-badge {
+      font-size: .7rem; padding: 2px 8px; border-radius: 999px;
+      background: var(--amber-soft); color: #b45309;
+    }
+    .modal-badge.on { background: var(--green-soft); color: #0f7a5f; }
+
     /* ---------- 小图（补全） ---------- */
     .chart-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-    .bar { height: 7px; background: var(--border); border-radius: 4px; overflow: hidden; margin: 4px 0 8px; }
-    .bar i { display: block; height: 100%; background: linear-gradient(90deg, #0e7c86, #34d399); width: 0; transition: width .3s; border-radius: 4px; }
+    .bar { height: 7px; background: var(--border); border-radius: 4px; overflow: hidden; margin: 4px 0 8px; cursor: pointer; }
+    .bar:hover { box-shadow: 0 0 0 2px rgba(14,124,134,.2); }
+    .bar i { display: block; height: 100%; background: linear-gradient(90deg, #0e7c86, #34d399); width: 0; transition: width .3s; border-radius: 4px; pointer-events: none; }
+    .bf-click-hint { font-size: .66rem; color: var(--faint); margin-top: 2px; }
     .bf-meta { display: flex; justify-content: space-between; align-items: baseline; font-size: .78rem; margin: -2px 0 4px; }
     .bf-meta span:first-child { font-weight: 700; color: var(--accent); }
     .bf-meta span:last-child { color: var(--muted); font-size: .7rem; }
@@ -420,6 +562,7 @@
             <div class="incr-legend">
               <span class="lg"><span class="sw" style="background:var(--accent)"></span>hits / 窗</span>
               <span class="lg"><span class="sw" style="background:#9aa6b2"></span>written / 窗</span>
+              <span class="lg"><span class="sw" style="background:#94a3b8;opacity:.45"></span>比对范围（最近 1 小时）</span>
               <span class="lg">移动鼠标查看明细</span>
             </div>
             <div class="chart-stage" id="incrStage">
@@ -443,14 +586,15 @@
       <!-- 右：侧栏 -->
       <div class="col-side">
         <div class="card">
-          <div class="card-head"><h2>补全进度</h2><span class="tag">已完成 %</span></div>
+          <div class="card-head"><h2>补全进度</h2><span class="tag">点击进度条查看详情</span></div>
           <div class="card-body chart-wrap">
-            <div class="bar"><i id="bfBar"></i></div>
+            <div class="bar" id="bfBarWrap" title="点击打开详情"><i id="bfBar"></i></div>
             <div class="bf-meta">
               <span id="bfPct">0%</span>
               <span id="bfDone">0/0 窗口</span>
             </div>
             <p id="bfTxt" style="font-size:.72rem;color:var(--muted);margin-bottom:4px"></p>
+            <p class="bf-click-hint">点击进度条打开详情弹框（独立 SSE）</p>
           </div>
         </div>
 
@@ -471,10 +615,11 @@
           <div class="card-head"><h2>对比查询</h2></div>
           <div class="card-body">
             <div class="form-row">
-              <label>开始<input type="text" id="cmpStart" placeholder="2026-08-28 09:50:00" /></label>
-              <label>结束<input type="text" id="cmpEnd" placeholder="2026-08-28 10:00:00" /></label>
+              <label>开始<input type="text" id="cmpStart" placeholder="留空则最近 1 小时" /></label>
+              <label>结束<input type="text" id="cmpEnd" placeholder="留空则 lag 对齐边界" /></label>
               <button class="btn btn-secondary" id="btnCompare" onclick="doCompare()">对比</button>
             </div>
+            <p class="hint" id="cmpHint">默认比对最近 1 小时（按 interval / lag 对齐）</p>
             <div class="compare-grid">
               <div><div class="num" id="cmpEs">-</div><div class="lbl">ES</div></div>
               <div><div class="num" id="cmpAdb">-</div><div class="lbl">ADB</div></div>
@@ -508,10 +653,121 @@
     </div>
   </div>
 
+  <!-- 补全详情弹框 -->
+  <div class="modal-mask" id="bfModal" role="dialog" aria-modal="true">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>补全详情 <span class="modal-badge" id="bfModalBadge">空闲</span></h3>
+        <button type="button" class="modal-close" id="bfModalClose" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="bf-modal-layout">
+          <section class="bf-overview">
+            <div class="bf-progress-head">
+              <span class="bf-sec-label">本次进度</span>
+              <span class="bf-progress-pct" id="bfModalPct">0%</span>
+            </div>
+            <div class="bar bar-lg"><i id="bfModalBar"></i></div>
+            <div class="bf-progress-grid">
+              <div class="cell"><div class="l">命中总数</div><div class="v" id="bfModalHits" title="">--</div></div>
+              <div class="cell"><div class="l">写入总数</div><div class="v" id="bfModalWritten" title="">--</div></div>
+              <div class="cell"><div class="l">窗口进度</div><div class="v" id="bfModalDone" title="">0/0</div></div>
+              <div class="cell"><div class="l">成功窗口</div><div class="v" id="bfModalOk" title="">--</div></div>
+              <div class="cell"><div class="l">失败窗口</div><div class="v" id="bfModalFail" title="">--</div></div>
+              <div class="cell"><div class="l">计时</div><div class="v" id="bfModalTimer">0秒</div></div>
+              <div class="cell"><div class="l">开始时间</div><div class="v" id="bfModalStarted" title="">--</div></div>
+              <div class="cell"><div class="l">结束时间</div><div class="v" id="bfModalEnded" title="">--</div></div>
+            </div>
+          </section>
+          <div class="bf-subhead">实时监测
+            <span class="bf-subhead-hint">补全吞吐 · 内存 · 协程 · GC（持续采样）</span>
+          </div>
+          <section class="bf-charts">
+            <div class="bf-chart-qps modal-chart-cell">
+              <h4>补全吞吐 · 每秒 QPS
+                <span class="modal-chart-legend">
+                  <i style="background:#0e7c86"></i>写入
+                  <i style="background:#34d399"></i>命中
+                  <i style="background:#9aa6b2"></i>窗口
+                </span>
+              </h4>
+              <div class="modal-chart-stage" id="bfQpsStage">
+                <svg id="bfQpsSvg"></svg>
+              </div>
+            </div>
+            <div class="modal-chart-cell">
+              <h4>服务 · 堆内存 MB
+                <span class="modal-chart-legend">
+                  <i style="background:#0e7c86"></i>Alloc
+                  <i style="background:#94a3b8"></i>HeapSys
+                </span>
+              </h4>
+              <div class="modal-chart-stage" id="bfMemStage">
+                <svg id="bfMemSvg"></svg>
+              </div>
+            </div>
+            <div class="modal-chart-cell">
+              <h4>服务 · 进程 Sys MB</h4>
+              <div class="modal-chart-stage" id="bfSysStage">
+                <svg id="bfSysSvg"></svg>
+              </div>
+            </div>
+            <div class="modal-chart-cell">
+              <h4>服务 · Goroutine</h4>
+              <div class="modal-chart-stage" id="bfGoStage">
+                <svg id="bfGoSvg"></svg>
+              </div>
+            </div>
+            <div class="modal-chart-cell">
+              <h4>服务 · GC 次数</h4>
+              <div class="modal-chart-stage" id="bfGcStage">
+                <svg id="bfGcSvg"></svg>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const incr = [];
     const MAX = 120; // 后端内存只保留最近一小时（约 120 条）
     const ROWS = 100; // 最近增量表格显示条数
+    let pipeCfg = { intervalSec: 10, lagSec: 60 };
+    let compareRange = null;
+    let cmpUserEdited = false;
+    let compareReady = false;
+
+    function pad2(n) { return String(n).padStart(2, '0'); }
+    function fmtDateTimeMs(ms) {
+      const d = new Date(ms);
+      return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    }
+    function alignFloorMs(ms, intervalMs) {
+      return ms - (ms % intervalMs);
+    }
+    function calcLastHourRange(intervalSec, lagSec) {
+      const intervalMs = (intervalSec || 10) * 1000;
+      const lagMs = (lagSec || 60) * 1000;
+      const ref = Date.now() - lagMs;
+      const endMs = alignFloorMs(ref, intervalMs);
+      const startMs = alignFloorMs(endMs - 3600000, intervalMs);
+      return { startMs, endMs, start: fmtDateTimeMs(startMs), end: fmtDateTimeMs(endMs) };
+    }
+    function refreshCompareDefaults(forceInputs) {
+      const r = calcLastHourRange(pipeCfg.intervalSec, pipeCfg.lagSec);
+      if (forceInputs || !cmpUserEdited) {
+        document.getElementById('cmpStart').value = r.start;
+        document.getElementById('cmpEnd').value = r.end;
+        compareRange = r;
+      }
+      document.getElementById('cmpHint').textContent =
+        `默认比对最近 1 小时（interval ${pipeCfg.intervalSec}s · lag ${pipeCfg.lagSec}s 对齐）：[${r.start} ~ ${r.end})`;
+      drawIncr();
+    }
+    document.getElementById('cmpStart').addEventListener('input', () => { cmpUserEdited = true; });
+    document.getElementById('cmpEnd').addEventListener('input', () => { cmpUserEdited = true; });
 
     function incrRowHtml(pt) {
       return `<tr><td>${pt.atStr||''}</td><td>${pt.window?.start||''}</td><td>${pt.hits}</td><td>${pt.written}</td><td>${pt.durationMs}ms</td><td class="stat-${pt.success?'ok':'fail'}">${pt.success?'ok':'fail'}</td></tr>`;
@@ -575,6 +831,25 @@
       const tMin = Math.min(...times), tMax = Math.max(...times);
       const spanT = Math.max(tMax - tMin, 1000);
       const x = t => pad.l + (t - tMin) / spanT * iw;
+
+      // 比对范围灰色区域（最近 1 小时，随时间滚动）
+      if (compareRange && compareRange.startMs != null && compareRange.endMs != null) {
+        const rs = compareRange.startMs, re = compareRange.endMs;
+        if (re > tMin && rs < tMax + spanT) {
+          const x1 = x(Math.max(rs, tMin));
+          const x2 = x(Math.min(re, Math.max(tMax, rs + 1)));
+          if (x2 > x1) {
+            const shade = document.createElementNS(NS, 'rect');
+            shade.setAttribute('x', x1);
+            shade.setAttribute('y', pad.t);
+            shade.setAttribute('width', x2 - x1);
+            shade.setAttribute('height', ih);
+            shade.setAttribute('fill', '#94a3b8');
+            shade.setAttribute('opacity', '0.18');
+            svgEl.appendChild(shade);
+          }
+        }
+      }
 
       // Y 轴（hits）
       const maxV = niceMax(Math.max(...incr.map(p => p.hits || 0), 1));
@@ -708,18 +983,211 @@
       const pct = pt.percent || 0;
       document.getElementById('bfBar').style.width = pct + '%';
       document.getElementById('bfPct').textContent = (pct.toFixed(1) || '0') + '%';
-      document.getElementById('bfDone').textContent = `${(pt.completed||0)+(pt.failed||0)}/${pt.totalWindows||0} 窗口`;
+      const done = (pt.completed||0)+(pt.failed||0);
+      document.getElementById('bfDone').textContent = `${done}/${pt.totalWindows||0} 窗口`;
       document.getElementById('bfTxt').textContent =
         `命中 ${pt.totalHits||0} · 写入 ${pt.totalWritten||0} · 失败 ${pt.failed||0}` +
         (pt.rangeStart ? `　[${pt.rangeStart} ~ ${pt.rangeEnd||''})` : '');
       if (pt.totalWindows) {
         document.getElementById('kpiBf').textContent = (pct.toFixed(0)||0) + '%';
-        document.getElementById('kpiBfSub').textContent = `${(pt.completed||0)+(pt.failed||0)}/${pt.totalWindows||0} 窗口`;
+        document.getElementById('kpiBfSub').textContent = `${done}/${pt.totalWindows||0} 窗口`;
+      } else {
+        document.getElementById('kpiBf').textContent = '空闲';
+        document.getElementById('kpiBfSub').textContent = '--';
       }
     }
 
     function addBf(pt) {
       renderBf(pt);
+    }
+
+    /* ================= 补全详情弹框 + 独立 SSE ================= */
+    let detailEs = null;
+    let lastBfDetail = null;
+    const bfQpsSvg = document.getElementById('bfQpsSvg');
+    const bfQpsStage = document.getElementById('bfQpsStage');
+    const bfMemStage = document.getElementById('bfMemStage');
+    const bfMemSvg = document.getElementById('bfMemSvg');
+    const bfSysStage = document.getElementById('bfSysStage');
+    const bfSysSvg = document.getElementById('bfSysSvg');
+    const bfGoStage = document.getElementById('bfGoStage');
+    const bfGoSvg = document.getElementById('bfGoSvg');
+    const bfGcStage = document.getElementById('bfGcStage');
+    const bfGcSvg = document.getElementById('bfGcSvg');
+    let bfTimerId = null;
+    let bfTimerMeta = null;
+
+    function fmtElapsed(ms) {
+      ms = Math.max(0, ms || 0);
+      const sec = Math.floor(ms / 1000);
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      if (h > 0) return `${h}时${pad2(m)}分${pad2(s)}秒`;
+      if (m > 0) return `${m}分${pad2(s)}秒`;
+      return `${s}秒`;
+    }
+    function tickBfTimer() {
+      if (!bfTimerMeta || !bfTimerMeta.startedAtMs) return;
+      const end = bfTimerMeta.active ? Date.now() : (bfTimerMeta.finishedAtMs || Date.now());
+      document.getElementById('bfModalTimer').textContent = fmtElapsed(end - bfTimerMeta.startedAtMs);
+    }
+    function startBfTimer(meta) {
+      bfTimerMeta = meta;
+      tickBfTimer();
+      if (bfTimerId) clearInterval(bfTimerId);
+      bfTimerId = meta && meta.active ? setInterval(tickBfTimer, 1000) : null;
+    }
+    function stopBfTimer() {
+      if (bfTimerId) { clearInterval(bfTimerId); bfTimerId = null; }
+      bfTimerMeta = null;
+    }
+    function fmtWinRange(win) {
+      if (!win || !win.start) return '--';
+      return `[${win.start} ~ ${win.end})`;
+    }
+
+    function setCellText(id, text) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.title = text;
+    }
+
+    function drawLineChart(stage, svg, series, lines, opts) {
+      const w = stage.clientWidth || 400;
+      const h = stage.clientHeight || 80;
+      svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      svg.innerHTML = '';
+      const emptyText = (opts && opts.emptyText) || '暂无数据';
+      if (!series || !series.length) {
+        svg.innerHTML = `<text x="${w/2}" y="${h/2}" text-anchor="middle" fill="#94a3b8" font-size="12">${emptyText}</text>`;
+        return;
+      }
+      const pad = { l: 36, r: 12, t: 12, b: 22 };
+      const iw = w - pad.l - pad.r;
+      const ih = h - pad.t - pad.b;
+      const n = series.length;
+      const xAt = i => pad.l + (n <= 1 ? iw / 2 : i * iw / (n - 1));
+      let maxY = opts && opts.maxY != null ? opts.maxY : 1;
+      if (!(opts && opts.maxY != null)) {
+        for (const ln of lines) {
+          for (const p of series) {
+            const v = typeof ln.get === 'function' ? ln.get(p) : (p[ln.key] || 0);
+            if (v > maxY) maxY = v;
+          }
+        }
+        if (maxY < 1) maxY = 1;
+      }
+      const yMin = (opts && opts.minY) || 0;
+      const yRange = maxY - yMin || 1;
+      const yAt = v => pad.t + ih - ((v - yMin) / yRange) * ih;
+      const fmtY = (opts && opts.fmtY) || (v => String(Math.round(v)));
+      const poly = (getter, color) => {
+        const pts = series.map((p, i) => `${xAt(i)},${yAt(getter(p))}`).join(' ');
+        return `<polyline fill="none" stroke="${color}" stroke-width="2" points="${pts}"/>`;
+      };
+      let grid = '';
+      for (let g = 0; g <= 4; g++) {
+        const yy = pad.t + ih * g / 4;
+        const val = yMin + yRange * (4 - g) / 4;
+        grid += `<line x1="${pad.l}" y1="${yy}" x2="${w-pad.r}" y2="${yy}" stroke="#eef2f4" stroke-width="1"/>`;
+        grid += `<text x="${pad.l-4}" y="${yy+3}" text-anchor="end" fill="#94a3b8" font-size="10">${fmtY(val)}</text>`;
+      }
+      const polys = lines.map(ln => poly(p => typeof ln.get === 'function' ? ln.get(p) : (p[ln.key] || 0), ln.color)).join('');
+      svg.innerHTML = grid + polys;
+    }
+
+    function drawBfCharts(d) {
+      const qps = d.qpsSeries || [];
+      const rt = d.runtimeSeries || [];
+      drawLineChart(bfQpsStage, bfQpsSvg, qps, [
+        { key: 'writeQps', color: '#0e7c86' },
+        { key: 'hitQps', color: '#34d399' },
+        { key: 'windowQps', color: '#9aa6b2' },
+      ], { emptyText: '暂无 QPS 数据' });
+      drawLineChart(bfMemStage, bfMemSvg, rt, [
+        { key: 'heapAllocMB', color: '#0e7c86' },
+        { key: 'heapSysMB', color: '#94a3b8' },
+      ], { fmtY: v => v.toFixed(1), emptyText: '暂无内存数据' });
+      drawLineChart(bfSysStage, bfSysSvg, rt, [
+        { key: 'sysMB', color: '#6366f1' },
+      ], { fmtY: v => v.toFixed(1), emptyText: '暂无进程内存数据' });
+      drawLineChart(bfGoStage, bfGoSvg, rt, [
+        { key: 'numGoroutine', color: '#6366f1' },
+      ], { emptyText: '暂无 Goroutine 数据' });
+      drawLineChart(bfGcStage, bfGcSvg, rt, [
+        { key: 'numGC', color: '#f59e0b' },
+      ], { emptyText: '暂无 GC 数据' });
+    }
+
+    function renderBfDetail(d) {
+      lastBfDetail = d;
+      const pt = d.progress || {};
+      const ses = d.session || {};
+      const pct = pt.percent || 0;
+      const done = (pt.completed||0)+(pt.failed||0);
+      document.getElementById('bfModalBar').style.width = pct + '%';
+      document.getElementById('bfModalPct').textContent = pct.toFixed(1) + '%';
+      setCellText('bfModalHits', (pt.totalHits||0).toLocaleString());
+      setCellText('bfModalWritten', (pt.totalWritten||0).toLocaleString());
+      setCellText('bfModalDone', `${done}/${pt.totalWindows||0}`);
+      setCellText('bfModalOk', (pt.completed||0));
+      setCellText('bfModalFail', (pt.failed||0));
+      setCellText('bfModalStarted', ses.startedAtStr || '--');
+      setCellText('bfModalEnded', d.backfillActive ? '进行中' : (ses.finishedAtStr || '--'));
+      const badge = document.getElementById('bfModalBadge');
+      if (d.backfillActive) {
+        badge.textContent = '进行中';
+        badge.className = 'modal-badge on';
+      } else {
+        badge.textContent = pt.totalWindows ? '已结束' : '空闲';
+        badge.className = 'modal-badge';
+      }
+      startBfTimer({
+        startedAtMs: ses.startedAtMs,
+        finishedAtMs: ses.finishedAtMs,
+        active: !!d.backfillActive,
+      });
+      drawBfCharts(d);
+      requestAnimationFrame(() => drawBfCharts(d));
+    }
+
+    function openBfModal() {
+      document.getElementById('bfModal').classList.add('open');
+      if (detailEs) { try { detailEs.close(); } catch (_) {} }
+      detailEs = new EventSource('/monitor/backfill/sse');
+      detailEs.addEventListener('snapshot', e => renderBfDetail(JSON.parse(e.data)));
+      detailEs.addEventListener('detail', e => renderBfDetail(JSON.parse(e.data)));
+      detailEs.onerror = () => { /* 浏览器会自动重连；关闭弹框时我们主动 close */ };
+    }
+
+    function closeBfModal() {
+      document.getElementById('bfModal').classList.remove('open');
+      stopBfTimer();
+      if (detailEs) {
+        detailEs.close();
+        detailEs = null;
+      }
+    }
+
+    document.getElementById('bfBarWrap').addEventListener('click', openBfModal);
+    document.getElementById('bfModalClose').addEventListener('click', closeBfModal);
+    document.getElementById('bfModal').addEventListener('click', e => {
+      if (e.target.id === 'bfModal') closeBfModal();
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && document.getElementById('bfModal').classList.contains('open')) closeBfModal();
+    });
+    window.addEventListener('resize', () => {
+      if (document.getElementById('bfModal').classList.contains('open') && lastBfDetail) {
+        drawBfCharts(lastBfDetail);
+      }
+    });
+    const bfModalEl = document.getElementById('bfModal');
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => {
+        if (bfModalEl.classList.contains('open') && lastBfDetail) drawBfCharts(lastBfDetail);
+      }).observe(bfModalEl.querySelector('.bf-charts') || bfModalEl);
     }
 
     function loadHistory(h) {
@@ -730,6 +1198,15 @@
     }
 
     function setPipe(p) {
+      pipeCfg.intervalSec = p.intervalSec || 10;
+      pipeCfg.lagSec = p.lagSec || 60;
+      refreshCompareDefaults(false);
+      if (!compareReady) {
+        compareReady = true;
+        doCompare(true);
+      } else if (!cmpUserEdited) {
+        doCompare(true);
+      }
       document.getElementById('esSt').textContent = p.esReady ? '就绪' : '未就绪';
       document.getElementById('adbSt').textContent = p.mysqlReady ? '就绪' : '未就绪';
       document.getElementById('parseSt').textContent = p.lastIncremental
@@ -739,7 +1216,6 @@
       document.getElementById('info').textContent =
         `增量${p.incrementalRunning?'运行':'停'} · ${p.intervalSec}s/lag${p.lagSec}s · ${tw?tw.start.slice(11)+'~'+tw.end.slice(11):'--'} · 补全${p.backfillActive?'中':'闲'}`;
 
-      // KPI
       const incrDot = document.getElementById('kpiIncrDot');
       incrDot.className = 'dot ' + (p.incrementalRunning ? 'on' : 'off');
       incrDot.textContent = p.incrementalRunning ? '▶' : '‖';
@@ -749,12 +1225,20 @@
 
       document.getElementById('kpiLoop').textContent = p.intervalSec + 's / 次';
       document.getElementById('kpiLagSub').textContent = 'lag ' + p.lagSec + 's';
-
       document.getElementById('kpiWin').textContent = tw ? tw.start.slice(11) + ' ~ ' + tw.end.slice(11) : '--';
 
       const bfDot = document.getElementById('kpiBfDot');
       bfDot.className = 'dot ' + (p.backfillActive ? 'on' : '');
       bfDot.textContent = p.backfillActive ? '◷' : '✓';
+      if (!p.backfillActive && !p.backfillProgress) {
+        document.getElementById('kpiBf').textContent = '空闲';
+        document.getElementById('kpiBfSub').textContent = '--';
+      } else if (p.backfillProgress) {
+        const bp = p.backfillProgress;
+        const done = (bp.completed||0)+(bp.failed||0);
+        document.getElementById('kpiBf').textContent = (bp.percent||0).toFixed(0) + '%';
+        document.getElementById('kpiBfSub').textContent = `${done}/${bp.totalWindows||0} 窗口`;
+      }
     }
 
     function setConn(state) {
@@ -800,16 +1284,16 @@
       }
     }
 
-    async function doCompare() {
+    async function doCompare(silent) {
       const start = document.getElementById('cmpStart').value.trim();
       const end = document.getElementById('cmpEnd').value.trim();
       const btn = document.getElementById('btnCompare');
       btn.disabled = true;
-      log('[对比] 查询 ' + (start || '默认窗口') + (end ? ' ~ ' + end : ''));
+      if (!silent) log('[对比] 查询 ' + (start || '最近1小时') + (end ? ' ~ ' + end : ''));
       try {
-        const resp = await apiPost('/sync/compare', { start, end });
+        const resp = await apiPost('/sync/compare', { start: start || undefined, end: end || undefined });
         if (resp.code !== 0) {
-          alert('对比失败: ' + resp.message);
+          if (!silent) alert('对比失败: ' + resp.message);
           log('[对比] 失败: ' + resp.message, true);
           return;
         }
@@ -818,11 +1302,20 @@
         document.getElementById('cmpAdb').textContent = d.mysql.count;
         document.getElementById('cmpDiff').textContent = (d.diff > 0 ? '+' : '') + d.diff;
         document.getElementById('cmpDiff').className = 'num' + (d.match ? ' diff-zero' : ' diff-pos');
+        compareRange = {
+          startMs: d.range.startMs,
+          endMs: d.range.endMs,
+          start: d.range.start,
+          end: d.range.end,
+        };
         document.getElementById('cmpRange').textContent =
-          `[${d.range.start} ~ ${d.range.end}) · ${d.match ? '一致 ✓' : '不一致 ✗'}`;
+          `实际比对范围：[${d.range.start} ~ ${d.range.end}) · ES 字段 ${d.es.field} · ADB 字段 ${d.mysql.field} · ${d.match ? '一致 ✓' : '不一致 ✗'}`;
+        document.getElementById('cmpHint').textContent =
+          `默认最近 1 小时（interval ${pipeCfg.intervalSec}s · lag ${pipeCfg.lagSec}s）；当前比对：[${d.range.start} ~ ${d.range.end})`;
+        drawIncr();
         log('[对比] ES=' + d.es.count + ' ADB=' + d.mysql.count + ' diff=' + d.diff);
       } catch (e) {
-        alert('请求失败: ' + e.message);
+        if (!silent) alert('请求失败: ' + e.message);
         log('[对比] 请求失败', true);
       } finally {
         btn.disabled = false;
@@ -858,7 +1351,8 @@
     es.addEventListener('backfill', e => addBf(JSON.parse(e.data)));
     es.addEventListener('runtime', e => onRuntime(JSON.parse(e.data)));
 
-    // 初始化绘制
+    // 初始化绘制与比对默认范围
+    refreshCompareDefaults(true);
     requestAnimationFrame(drawIncr);
   </script>
 </body>
