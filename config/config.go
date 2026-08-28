@@ -37,6 +37,7 @@ type ESConfig struct {
 	Method    string `mapstructure:"method"`
 	Fields    string `mapstructure:"fields"`    // 解析字段名，如 content
 	DateField string `mapstructure:"dateField"` // 日期字段，默认 @timestamp
+	Strip     string `mapstructure:"strip"`     // 正文事件前缀标识，识别并去掉头部，默认 用户事件记录===
 }
 
 // ParseField 返回实际使用的解析字段名
@@ -45,6 +46,14 @@ func (e ESConfig) ParseField() string {
 		return s
 	}
 	return "content"
+}
+
+// StripPrefix 返回正文事件前缀标识（用于识别并去掉内容头部）
+func (e ESConfig) StripPrefix() string {
+	if s := strings.TrimSpace(e.Strip); s != "" {
+		return s
+	}
+	return "用户事件记录==="
 }
 
 type MySQLConfig struct {
@@ -58,12 +67,14 @@ type MySQLConfig struct {
 }
 
 type SyncConfig struct {
-	Interval       int `mapstructure:"interval"`         // 同步间隔（秒）
-	MaxSize        int `mapstructure:"max_size"`         // 单次最大条数
-	MaxTime        int `mapstructure:"max_time"`         // 同步最大时间（秒）
-	MaxRetry       int `mapstructure:"max_retry"`        // 最大重试次数
-	RetryDelay     int `mapstructure:"retry_delay"`      // 重试延迟（秒）
-	RetryDelayMax  int `mapstructure:"retry_delay_max"`  // 重试最大延迟（秒）
+	Interval      int `mapstructure:"interval"`        // 同步窗口（秒）
+	LagSeconds    int `mapstructure:"lag_seconds"`      // ES 写入延迟补偿（秒），默认 60
+	MaxSize       int `mapstructure:"max_size"`         // ES 单窗口最大拉取条数
+	BatchSize     int `mapstructure:"batch_size"`       // ADB 单条 REPLACE 最大行数，默认与 max_size 一致
+	MaxTime       int `mapstructure:"max_time"`         // 同步最大时间（秒）
+	MaxRetry      int `mapstructure:"max_retry"`        // 最大重试次数
+	RetryDelay    int `mapstructure:"retry_delay"`      // 重试延迟（秒）
+	RetryDelayMax int `mapstructure:"retry_delay_max"`  // 重试最大延迟（秒）
 }
 
 var global *Config
@@ -92,10 +103,13 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("es.method", "addEventLog")
 	v.SetDefault("es.fields", "content")
 	v.SetDefault("es.dateField", "@timestamp")
+	v.SetDefault("es.strip", "用户事件记录===")
 	v.SetDefault("mysql.port", 3306)
 	v.SetDefault("mysql.table", "app_event_log")
 	v.SetDefault("sync.interval", 10)
+	v.SetDefault("sync.lag_seconds", 60)
 	v.SetDefault("sync.max_size", 1000)
+	v.SetDefault("sync.batch_size", 1000)
 	v.SetDefault("sync.max_time", 10)
 	v.SetDefault("sync.max_retry", 3)
 	v.SetDefault("sync.retry_delay", 1)
@@ -103,7 +117,7 @@ func Load(path string) (*Config, error) {
 
 	cfg := &Config{}
 	if path == "" {
-		path = "config.yaml"
+		path = "config/config.yaml"
 	}
 
 	if _, err := os.Stat(path); err == nil {
@@ -122,9 +136,9 @@ func Load(path string) (*Config, error) {
 		"server.addr",
 		"log.level",
 		"es.url", "es.index", "es.username", "es.password", "es.method",
-		"es.fields", "es.dateField",
+		"es.fields", "es.dateField", "es.strip",
 		"mysql.dsn", "mysql.host", "mysql.port", "mysql.user", "mysql.password", "mysql.database", "mysql.table",
-		"sync.interval", "sync.max_size", "sync.max_time", "sync.max_retry",
+		"sync.interval", "sync.lag_seconds", "sync.max_size", "sync.batch_size", "sync.max_time", "sync.max_retry",
 		"sync.retry_delay", "sync.retry_delay_max",
 	}
 	for _, k := range keys {
@@ -157,6 +171,9 @@ func (c *Config) normalize() {
 	if c.ES.DateField == "" {
 		c.ES.DateField = "@timestamp"
 	}
+	if c.ES.Strip == "" {
+		c.ES.Strip = "用户事件记录==="
+	}
 	if c.MySQL.Port == 0 {
 		c.MySQL.Port = 3306
 	}
@@ -166,8 +183,14 @@ func (c *Config) normalize() {
 	if c.Sync.Interval <= 0 {
 		c.Sync.Interval = 10
 	}
+	if c.Sync.LagSeconds <= 0 {
+		c.Sync.LagSeconds = 60
+	}
 	if c.Sync.MaxSize <= 0 {
 		c.Sync.MaxSize = 1000
+	}
+	if c.Sync.BatchSize <= 0 {
+		c.Sync.BatchSize = c.Sync.MaxSize
 	}
 	if c.Sync.MaxRetry <= 0 {
 		c.Sync.MaxRetry = 3

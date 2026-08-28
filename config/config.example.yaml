@@ -1,0 +1,36 @@
+# 本地开发配置（复制 config.example.yaml 后填写）
+# 容器内路径为 /config/config.yaml，由 ConfigMap 挂载
+
+server:
+  addr: ":8080"
+
+log:
+  level: info
+
+es:
+  url: "http://127.0.0.1:9200"
+  index: "ysh-ysh-app-info*"
+  username: ""
+  password: ""
+  method: "addEventLog"
+  fields: "content"
+  dateField: "@timestamp"
+  strip: "用户事件记录==="   # 正文事件前缀标识，识别并去掉头部；空串则用默认值：用户事件记录===
+
+mysql:
+  host: "127.0.0.1"
+  port: 3306
+  user: "root"
+  password: "password"
+  database: "esadb"
+  table: "app_event_log"
+
+sync:
+  interval: 10
+  lag_seconds: 60
+  max_size: 1000      # ES 单窗口最多拉取条数
+  batch_size: 1000    # ADB 单条 REPLACE INTO 行数，10 秒数据多时可调大（如 2000、5000）
+  max_time: 10
+  max_retry: 3
+  retry_delay: 1
+  retry_delay_max: 10

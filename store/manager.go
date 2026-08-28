@@ -8,12 +8,13 @@ import (
 	"esAdb/config"
 )
 
-// Manager 统一持有 ES / MySQL / Syncer
+// Manager 统一持有 ES / MySQL / Syncer / Monitor
 type Manager struct {
-	cfg    *config.Config
-	ES     *ESStore
-	MySQL  *MySQLStore
-	Syncer *Syncer
+	cfg     *config.Config
+	ES      *ESStore
+	MySQL   *MySQLStore
+	Syncer  *Syncer
+	Monitor *Monitor
 }
 
 var (
@@ -33,7 +34,7 @@ func Init(cfg *config.Config) *Manager {
 			common.Warn("ES 未配置，跳过初始化")
 		}
 		if cfg.HasMySQL() {
-			ms, err := NewMySQLStore(cfg.MySQL)
+			ms, err := NewMySQLStore(cfg.MySQL, cfg.Sync.BatchSize)
 			if err != nil {
 				common.Error("MySQL 初始化失败: %v（将跳过 MySQL 操作）", err)
 			} else {
@@ -43,6 +44,8 @@ func Init(cfg *config.Config) *Manager {
 			common.Warn("MySQL 未配置，跳过初始化")
 		}
 		m.Syncer = NewSyncer(cfg, m)
+		m.Monitor = NewMonitor(m)
+		m.Monitor.Start()
 		mgr = m
 	})
 	return mgr
@@ -50,13 +53,13 @@ func Init(cfg *config.Config) *Manager {
 
 func Get() *Manager { return mgr }
 
-// StartIncremental 启动增量准点同步（需 ES+MySQL 均就绪）
+// StartIncremental 启动增量同步调度
 func (m *Manager) StartIncremental(ctx context.Context) {
 	if m == nil || m.Syncer == nil {
 		return
 	}
-	if !m.cfg.HasES() || m.ES == nil || m.MySQL == nil {
-		common.Warn("无配置或不完整，增量同步不会执行")
+	if m.ES == nil || m.MySQL == nil {
+		common.Warn("ES 或 MySQL 未就绪，跳过增量调度")
 		return
 	}
 	m.Syncer.StartIncremental(ctx)

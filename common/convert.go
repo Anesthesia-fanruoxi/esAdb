@@ -95,36 +95,3 @@ func MapToEventLog(m map[string]string) (*model.EventLog, error) {
 	}
 	return el, nil
 }
-
-func sqlEscape(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `'`, `\'`)
-	return s
-}
-
-func sqlValue(v string) string {
-	if v == "" || v == "null" {
-		return "NULL"
-	}
-	return "'" + sqlEscape(v) + "'"
-}
-
-// ToInsert 生成一条 INSERT 语句
-func ToInsert(m map[string]string) string {
-	vals := make([]string, len(model.Columns))
-	colVals := map[string]string{}
-	for k, v := range m {
-		if col, ok := model.KeyToCol[k]; ok {
-			colVals[col] = v
-		}
-	}
-	for i, col := range model.Columns {
-		vals[i] = sqlValue(colVals[col])
-	}
-	return fmt.Sprintf(
-		"INSERT INTO `%s` (`%s`) VALUES (%s);",
-		model.GetTableName(),
-		strings.Join(model.Columns, "`, `"),
-		strings.Join(vals, ", "),
-	)
-}

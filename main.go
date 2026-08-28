@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"flag"
 	"net/http"
 	"os"
@@ -16,10 +17,15 @@ import (
 )
 
 func main() {
-	cfgPath := flag.String("c", "config.yaml", "配置文件路径")
+	cfgPath := flag.String("c", "config/config.yaml", "配置文件路径（容器内默认 /config/config.yaml）")
 	flag.Parse()
 
 	cfg, _ := config.Load(*cfgPath)
+
+	// 启动诊断：即使日志级别为 off，配置异常也输出到 stderr
+	if cfg.Tip != "" {
+		fmt.Fprintf(os.Stderr, "[es-adb] 配置路径: %s | %s\n", *cfgPath, cfg.Tip)
+	}
 
 	// 日志级别：ESADB_LOG_LEVEL / config log.level = debug|info|warn|error|off
 	common.SetLevel(cfg.Log.Level)
@@ -49,9 +55,9 @@ func main() {
 	mgr.StartIncremental(ctx)
 
 	addr := cfg.Server.Addr
-	common.Info("HTTP 监听 %s  →  GET /health | POST /sync/range | GET /sync/status", addr)
+	common.Info("HTTP 监听 %s  →  GET / | /monitor/sse | /health | /sync/backfill | /sync/compare", addr)
 
-	srv := &http.Server{Addr: addr, Handler: router.New(cfg)}
+	srv := &http.Server{Addr: addr, Handler: router.New(cfg, mgr)}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			common.Error("HTTP 退出: %v", err)

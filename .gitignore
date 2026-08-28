@@ -3,6 +3,7 @@
 *.dll
 *.so
 *.dylib
+es-adb
 
 # IDE
 .idea/
@@ -10,6 +11,10 @@
 
 # 本地配置（含密钥，勿提交）
 config.yaml
+config/config.yaml
+
+# 生成的 ConfigMap（含密钥）
+deploy/configmap.yaml
 
 # 系统
 .DS_Store

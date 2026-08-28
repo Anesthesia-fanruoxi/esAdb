@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>es-adb 同步监控</title>
+  <style>
+    :root {
+      --bg: #eef3f5;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --border-soft: #eef2f4;
+      --text: #1e293b;
+      --muted: #64748b;
+      --faint: #94a3b8;
+      --accent: #0e7c86;
+      --accent-soft: #e0f2f4;
+      --green: #10b981;
+      --green-soft: #e6f7f1;
+      --amber: #f59e0b;
+      --amber-soft: #fef3e2;
+      --red: #ef4444;
+      --red-soft: #fdecec;
+      --radius: 12px;
+      --shadow: 0 1px 2px rgba(15, 45, 60, .06), 0 2px 8px rgba(15, 45, 60, .05);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.4;
+      font-size: 13px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* 滚动条颜色匹配所在面板背景 */
+    * { scrollbar-width: thin; scrollbar-color: #cdd8dd transparent; }
+    *::-webkit-scrollbar { width: 8px; height: 8px; }
+    *::-webkit-scrollbar-thumb { background: #cdd8dd; border-radius: 6px; }
+    *::-webkit-scrollbar-thumb:hover { background: #b5c4cb; }
+    *::-webkit-scrollbar-track { background: transparent; }
+
+    .app {
+      height: 100vh;
+      width: 100vw;
+      padding: 10px 14px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+    }
+
+    /* ---------- 顶部栏 ---------- */
+    header {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 9px 16px;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border-soft);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .logo {
+      width: 30px; height: 30px; flex-shrink: 0;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #0e7c86, #12b3a8);
+      color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 11px; letter-spacing: .5px;
+    }
+    h1 { font-size: 1.05rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .head-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    #connBadge {
+      font-size: .72rem; padding: 4px 10px; border-radius: 999px;
+      background: var(--amber-soft); color: #b45309; white-space: nowrap;
+    }
+    #connBadge.ok { background: var(--green-soft); color: #0f7a5f; }
+    #connBadge.err { background: var(--red-soft); color: #c0392b; }
+
+    /* ---------- KPI 概览条 ---------- */
+    .kpis {
+      flex-shrink: 0;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .kpi {
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .kpi .dot {
+      width: 34px; height: 34px; flex-shrink: 0;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--accent-soft); color: var(--accent);
+    }
+    .kpi .dot.on { background: var(--green-soft); color: var(--green); }
+    .kpi .dot.off { background: var(--amber-soft); color: var(--amber); }
+    .kpi .body { min-width: 0; }
+    .kpi .lbl { font-size: .68rem; color: var(--faint); margin-bottom: 2px; }
+    .kpi .val { font-size: .92rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .kpi .sub { font-size: .66rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ---------- 数据流 ---------- */
+    .pipeline {
+      flex-shrink: 0;
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+    .pipe {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      flex: 1;
+    }
+    .box {
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 14px;
+      min-width: 92px;
+      max-width: 140px;
+      flex: 1;
+      text-align: center;
+      background: #f8fafb;
+      transition: all .3s;
+    }
+    .box.on { border-color: var(--green); background: #f0fdf7; box-shadow: 0 0 0 3px rgba(16,185,129,.12); }
+    .box .name { font-weight: 650; font-size: .85rem; }
+    .box small { color: var(--muted); font-size: .68rem; display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .arrow { color: var(--faint); font-size: 1rem; flex-shrink: 0; }
+    .pipe-info {
+      flex-shrink: 0; max-width: 340px;
+      font-size: .76rem; color: var(--muted);
+      border-left: 1px solid var(--border-soft);
+      padding-left: 18px;
+      line-height: 1.5;
+      word-break: break-all; overflow-wrap: anywhere;
+    }
+    @media (max-width: 900px) { .pipe-info { border-left: none; padding-left: 0; max-width: 100%; width: 100%; } }
+
+    /* ---------- 主工作区 ---------- */
+    .work {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 2.3fr) minmax(0, 1fr);
+      gap: 10px;
+    }
+    @media (max-width: 1000px) { .work { grid-template-columns: minmax(0, 1fr); overflow-y: auto; } }
+    .col-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+    .col-side { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .card .card-head {
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 14px 6px;
+    }
+    .card h2 { font-size: .78rem; color: var(--muted); font-weight: 650; letter-spacing: .2px; }
+    .card .tag { font-size: .66rem; color: var(--faint); white-space: nowrap; }
+    .card-body { flex: 1; min-height: 0; overflow: auto; padding: 0 14px 13px; }
+
+    /* ---------- 大尺寸增量图 ---------- */
+    .incr-content { display: flex; flex-direction: column; min-height: 0; flex: 1; padding: 0 14px 13px; }
+    .incr-legend {
+      flex-shrink: 0;
+      display: flex; align-items: center; gap: 16px;
+      padding: 2px 0 8px;
+      font-size: .72rem; color: var(--muted); flex-wrap: wrap;
+    }
+    .incr-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+    .incr-legend .sw { width: 18px; height: 3px; border-radius: 2px; }
+    .chart-stage { position: relative; flex: 1; min-height: 0; }
+    .chart-stage svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    .chart-stage .grid-line { stroke: var(--border-soft); stroke-width: 1; }
+    .chart-stage .axis-text { fill: var(--faint); font-size: 10.5px; font-family: inherit; }
+    .chart-stage .area-fill { opacity: .14; }
+    .chart-stage .hit { fill: transparent; cursor: pointer; }
+    .chart-stage .dot-on-hover { fill: var(--accent); stroke: #fff; stroke-width: 1.5; }
+
+    /* 悬停提示 */
+    .incr-tip {
+      position: absolute;
+      pointer-events: none;
+      background: rgba(30, 41, 59, .95);
+      color: #f1f5f9;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: .72rem;
+      line-height: 1.55;
+      box-shadow: 0 4px 14px rgba(0,0,0,.18);
+      white-space: nowrap;
+      transform: translate(-50%, -105%);
+      z-index: 20;
+      opacity: 0;
+      transition: opacity .12s;
+      min-width: 150px;
+    }
+    .incr-tip .t-title { color: var(--faint); font-size: .66rem; margin-bottom: 2px; }
+    .incr-tip .t-row { display: flex; justify-content: space-between; gap: 14px; }
+    .incr-tip .t-row b { text-align: right; font-weight: 600; }
+    .incr-tip .t-ok { color: #34d399; } .incr-tip .t-fail { color: #f87171; }
+    .incr-empty {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--faint); font-size: .78rem;
+    }
+
+    /* ---------- 小图（补全） ---------- */
+    .chart-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .bar { height: 7px; background: var(--border); border-radius: 4px; overflow: hidden; margin: 4px 0 8px; }
+    .bar i { display: block; height: 100%; background: linear-gradient(90deg, #0e7c86, #34d399); width: 0; transition: width .3s; border-radius: 4px; }
+    .bf-meta { display: flex; justify-content: space-between; align-items: baseline; font-size: .78rem; margin: -2px 0 4px; }
+    .bf-meta span:first-child { font-weight: 700; color: var(--accent); }
+    .bf-meta span:last-child { color: var(--muted); font-size: .7rem; }
+
+    /* 表单 */
+    .form-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+    label {
+      flex: 1 1 130px; min-width: 0;
+      display: flex; flex-direction: column; gap: 4px;
+      font-size: .72rem; color: var(--muted);
+    }
+    input[type=text] {
+      width: 100%; max-width: 100%;
+      padding: 6px 9px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      font-size: .8rem;
+      color: var(--text);
+      background: #fbfcfd;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input[type=text]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,124,134,.14); background: #fff; }
+    input[type=text]::placeholder { color: var(--faint); }
+    .btn {
+      flex-shrink: 0;
+      padding: 6px 16px;
+      border: none; border-radius: 7px;
+      font-size: .8rem; cursor: pointer;
+      font-weight: 550; white-space: nowrap;
+      transition: opacity .15s, transform .05s;
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: #0b6a73; }
+    .btn-secondary { background: var(--green); color: #fff; }
+    .btn-secondary:hover { background: #0da271; }
+    .hint { font-size: .68rem; color: var(--faint); margin-top: 7px; line-height: 1.35; }
+    .result {
+      margin-top: 9px;
+      padding: 7px 10px;
+      border-radius: 7px;
+      background: #f8fafb;
+      border: 1px solid var(--border);
+      font-size: .74rem;
+      word-break: break-all; overflow-wrap: anywhere;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .result.ok { border-color: #b7ecd8; background: var(--green-soft); color: #0a7a5f; white-space: normal; }
+    .result.fail { border-color: #f3c1bd; background: var(--red-soft); color: #c0392b; white-space: normal; }
+
+    /* 对比查询 */
+    .compare-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin-top: 10px; }
+    .compare-grid > div {
+      text-align: center; padding: 9px 6px;
+      background: #f8fafb; border-radius: 9px;
+      border: 1px solid var(--border-soft); min-width: 0;
+    }
+    .compare-grid .num { font-size: 1.25rem; font-weight: 700; }
+    .compare-grid .num.diff-zero { color: var(--green); }
+    .compare-grid .num.diff-pos { color: var(--red); }
+    .compare-grid .lbl { font-size: .66rem; color: var(--faint); margin-top: 2px; }
+
+    /* 服务状态 */
+    .rt-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; }
+    .rt-grid .cell {
+      background: #f8fafb; border: 1px solid var(--border-soft);
+      border-radius: 8px; padding: 6px 9px; min-width: 0;
+    }
+    .rt-grid .cell .v { font-size: .92rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rt-grid .cell .l { font-size: .62rem; color: var(--faint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* 表格 */
+    .table-wrap { height: 100%; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: .74rem; table-layout: fixed; }
+    th, td {
+      padding: 6px 8px; text-align: left;
+      border-bottom: 1px solid var(--border-soft);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    th { color: var(--muted); font-weight: 600; background: #fafcfd; position: sticky; top: 0; z-index: 1; }
+    td:last-child.stat-ok { color: var(--green); font-weight: 600; }
+    td:last-child.stat-fail { color: var(--red); font-weight: 600; }
+    th:nth-child(1), td:nth-child(1) { width: 16%; }
+    th:nth-child(2), td:nth-child(2) { width: 30%; }
+    th:nth-child(3), td:nth-child(3) { width: 11%; }
+    th:nth-child(4), td:nth-child(4) { width: 13%; }
+    th:nth-child(5), td:nth-child(5) { width: 14%; }
+    th:nth-child(6), td:nth-child(6) { width: 12%; }
+
+    /* 日志 */
+    #log {
+      flex: 1; min-height: 0;
+      overflow-y: auto;
+      font-size: .72rem;
+      color: var(--muted);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      line-height: 1.65;
+      padding: 4px 12px 8px;
+    }
+    #log .err { color: var(--red); }
+    #log .ts { color: var(--faint); margin-right: 6px; }
+
+    @media (max-width: 640px) { .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div class="logo">es</div>
+        <h1>es-adb 同步监控</h1>
+      </div>
+      <div class="head-right">
+        <span id="connBadge">SSE 连接中...</span>
+      </div>
+    </header>
+
+    <!-- KPI 概览 -->
+    <section class="kpis">
+      <div class="kpi">
+        <div class="dot" id="kpiIncrDot">→</div>
+        <div class="body">
+          <div class="lbl">增量写入</div>
+          <div class="val" id="kpiIncr">--</div>
+          <div class="sub" id="kpiIncrSub">等待数据</div>
+        </div>
+      </div>
+      <div class="kpi">
+        <div class="dot">⏱</div>
+        <div class="body">
+          <div class="lbl">巡检节奏 / 延迟</div>
+          <div class="val" id="kpiLoop">--</div>
+          <div class="sub" id="kpiLagSub">--</div>
+        </div>
+      </div>
+      <div class="kpi">
+        <div class="dot">⌛</div>
+        <div class="body">
+          <div class="lbl">目标窗口</div>
+          <div class="val" id="kpiWin">--</div>
+          <div class="sub">时间范围</div>
+        </div>
+      </div>
+      <div class="kpi">
+        <div class="dot" id="kpiBfDot">◷</div>
+        <div class="body">
+          <div class="lbl">补全进度</div>
+          <div class="val" id="kpiBf">空闲</div>
+          <div class="sub" id="kpiBfSub">--</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 数据流 -->
+    <section class="pipeline">
+      <div class="pipe">
+        <div class="box" id="es"><div class="name">ES</div><small id="esSt">--</small></div>
+        <span class="arrow">→</span>
+        <div class="box" id="parse"><div class="name">解析</div><small id="parseSt">--</small></div>
+        <span class="arrow">→</span>
+        <div class="box" id="adb"><div class="name">ADB</div><small id="adbSt">--</small></div>
+      </div>
+      <div class="pipe-info" id="info"></div>
+    </section>
+
+    <!-- 主工作区 -->
+    <div class="work">
+      <!-- 左：大尺寸增量图 + 表格 -->
+      <div class="col-main">
+        <div class="card" style="flex:1 1 46%;min-height:240px">
+          <div class="card-head">
+            <h2>增量写入</h2>
+            <span class="tag">最近 1 小时 · 内存仅保留 120 条</span>
+          </div>
+          <div class="incr-content">
+            <div class="incr-legend">
+              <span class="lg"><span class="sw" style="background:var(--accent)"></span>hits / 窗</span>
+              <span class="lg"><span class="sw" style="background:#9aa6b2"></span>written / 窗</span>
+              <span class="lg">移动鼠标查看明细</span>
+            </div>
+            <div class="chart-stage" id="incrStage">
+              <div class="incr-tip" id="incrTip"></div>
+              <svg id="incrSvg"></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="flex:1 1 54%;min-height:180px">
+          <div class="card-head"><h2>最近增量</h2><span class="tag">最新 20 条</span></div>
+          <div class="card-body table-wrap" style="padding:0 6px 8px">
+            <table>
+              <thead><tr><th>时间</th><th>窗口</th><th>hits</th><th>written</th><th>耗时</th><th>状态</th></tr></thead>
+              <tbody id="incrTbl"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右：侧栏 -->
+      <div class="col-side">
+        <div class="card">
+          <div class="card-head"><h2>补全进度</h2><span class="tag">已完成 %</span></div>
+          <div class="card-body chart-wrap">
+            <div class="bar"><i id="bfBar"></i></div>
+            <div class="bf-meta">
+              <span id="bfPct">0%</span>
+              <span id="bfDone">0/0 窗口</span>
+            </div>
+            <p id="bfTxt" style="font-size:.72rem;color:var(--muted);margin-bottom:4px"></p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>补全同步</h2></div>
+          <div class="card-body">
+            <div class="form-row">
+              <label>开始<input type="text" id="bfStart" placeholder="2026-08-28 00:00:00" /></label>
+              <label>结束<input type="text" id="bfEnd" placeholder="可选" /></label>
+              <button class="btn btn-primary" id="btnBackfill" onclick="doBackfill()">补全</button>
+            </div>
+            <p class="hint">结束留空补到 lag 边界</p>
+            <div class="result" id="bfResult">等待操作...</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>对比查询</h2></div>
+          <div class="card-body">
+            <div class="form-row">
+              <label>开始<input type="text" id="cmpStart" placeholder="2026-08-28 09:50:00" /></label>
+              <label>结束<input type="text" id="cmpEnd" placeholder="2026-08-28 10:00:00" /></label>
+              <button class="btn btn-secondary" id="btnCompare" onclick="doCompare()">对比</button>
+            </div>
+            <div class="compare-grid">
+              <div><div class="num" id="cmpEs">-</div><div class="lbl">ES</div></div>
+              <div><div class="num" id="cmpAdb">-</div><div class="lbl">ADB</div></div>
+              <div><div class="num" id="cmpDiff">-</div><div class="lbl">差异</div></div>
+            </div>
+            <p class="info" id="cmpRange" style="font-size:.72rem;color:var(--muted);margin-top:8px"></p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>服务状态</h2><span class="tag" id="rtUptime">--</span></div>
+          <div class="card-body">
+            <div class="rt-grid">
+              <div class="cell"><div class="v" id="rtGoroutines">--</div><div class="l">并发协程</div></div>
+              <div class="cell"><div class="v" id="rtCPU">--</div><div class="l">运行 / 逻辑 CPU</div></div>
+              <div class="cell"><div class="v" id="rtAlloc">--</div><div class="l">已分配内存 Alloc</div></div>
+              <div class="cell"><div class="v" id="rtHeap">--</div><div class="l">堆内存 HeapSys</div></div>
+              <div class="cell"><div class="v" id="rtSys">--</div><div class="l">进程内存 Sys</div></div>
+              <div class="cell"><div class="v" id="rtTotal">--</div><div class="l">累计分配</div></div>
+              <div class="cell"><div class="v" id="rtGc">--</div><div class="l">GC 次数 / 暂停s</div></div>
+              <div class="cell"><div class="v" id="rtGo">--</div><div class="l">Go 版本</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="flex:1.2;min-height:140px">
+          <div class="card-head"><h2>事件日志</h2></div>
+          <div id="log"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const incr = [];
+    const MAX = 120; // 后端内存只保留最近一小时（约 120 条）
+    const ROWS = 100; // 最近增量表格显示条数
+
+    function incrRowHtml(pt) {
+      return `<tr><td>${pt.atStr||''}</td><td>${pt.window?.start||''}</td><td>${pt.hits}</td><td>${pt.written}</td><td>${pt.durationMs}ms</td><td class="stat-${pt.success?'ok':'fail'}">${pt.success?'ok':'fail'}</td></tr>`;
+    }
+    function buildIncrTable() {
+      document.getElementById('incrTbl').innerHTML = incr.slice(-ROWS).reverse().map(incrRowHtml).join('');
+    }
+
+    function log(msg, err) {
+      const d = document.createElement('div');
+      d.className = err ? 'err' : '';
+      d.innerHTML = '<span class="ts">' + new Date().toLocaleTimeString() + '</span>' + escapeHtml(msg);
+      const box = document.getElementById('log');
+      box.prepend(d);
+      while (box.children.length > 40) box.lastChild.remove();
+    }
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    /* ================= 大尺寸增量折线图 ================= */
+    const stage = document.getElementById('incrStage');
+    const svgEl = document.getElementById('incrSvg');
+    const tipEl = document.getElementById('incrTip');
+    const NS = 'http://www.w3.org/2000/svg';
+    let curHover = -1;
+
+    function fmtTime(iso) {
+      const s = String(iso || '');
+      const m = s.match(/(\d{2}:\d{2}:\d{2})/);
+      return m ? m[1] : s;
+    }
+
+    function niceMax(v) {
+      if (v <= 4) return 4;
+      const pow = Math.pow(10, Math.floor(Math.log10(v)));
+      const d = v / pow;
+      const nd = d <= 1 ? 1 : d <= 2 ? 2 : d <= 5 ? 5 : 10;
+      return nd * pow;
+    }
+
+    function renderIncrChart(w, h) {
+      svgEl.innerHTML = '';
+      if (!incr.length) {
+        svgEl.innerHTML = '';
+        const empty = document.createElementNS(NS, 'text');
+        empty.setAttribute('x', w / 2); empty.setAttribute('y', h / 2);
+        empty.setAttribute('text-anchor', 'middle'); empty.setAttribute('class', 'axis-text');
+        empty.textContent = '暂无数据，等待增量事件…';
+        svgEl.appendChild(empty);
+        return;
+      }
+      const pad = { l: 44, r: 14, t: 12, b: 24 };
+      const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
+
+      // 时间轴（基于 window.start）
+      const times = incr.map(p => {
+        const d = new Date((p.window && p.window.start ? p.window.start : p.atStr));
+        return d.getTime();
+      });
+      const tMin = Math.min(...times), tMax = Math.max(...times);
+      const spanT = Math.max(tMax - tMin, 1000);
+      const x = t => pad.l + (t - tMin) / spanT * iw;
+
+      // Y 轴（hits）
+      const maxV = niceMax(Math.max(...incr.map(p => p.hits || 0), 1));
+      const y = v => pad.t + ih - (v / maxV * ih);
+      const maxW = Math.max(...incr.map(p => p.written || 0), 0);
+
+      // 网格 + Y 轴标签
+      const gridN = 4;
+      for (let i = 0; i <= gridN; i++) {
+        const v = maxV * i / gridN;
+        const yy = y(v);
+        const g = document.createElementNS(NS, 'line');
+        g.setAttribute('class', 'grid-line'); g.setAttribute('x1', pad.l); g.setAttribute('x2', w - pad.r); g.setAttribute('y1', yy); g.setAttribute('y2', yy);
+        svgEl.appendChild(g);
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', pad.l - 6); t.setAttribute('y', yy + 3); t.setAttribute('text-anchor', 'end'); t.setAttribute('class', 'axis-text');
+        t.textContent = Math.round(v);
+        svgEl.appendChild(t);
+      }
+      // X 轴时间标签（约 5 档）
+      const xN = Math.min(6, Math.max(2, Math.round(iw / 130)));
+      for (let i = 0; i <= xN; i++) {
+        const t = tMin + spanT * i / xN;
+        const xx = x(t);
+        const g = document.createElementNS(NS, 'line');
+        g.setAttribute('class', 'grid-line'); g.setAttribute('x1', xx); g.setAttribute('y1', pad.t); g.setAttribute('x2', xx); g.setAttribute('y2', pad.t + ih);
+        svgEl.appendChild(g);
+        const t2 = document.createElementNS(NS, 'text');
+        t2.setAttribute('x', xx); t2.setAttribute('y', h - 7); t2.setAttribute('text-anchor', 'middle'); t2.setAttribute('class', 'axis-text');
+        t2.textContent = new Date(t).toTimeString().slice(0, 5);
+        svgEl.appendChild(t2);
+      }
+      // 基线
+      const base = document.createElementNS(NS, 'line');
+      base.setAttribute('x1', pad.l); base.setAttribute('y1', pad.t + ih); base.setAttribute('x2', w - pad.r); base.setAttribute('y2', pad.t + ih);
+      base.setAttribute('class', 'grid-line'); svgEl.appendChild(base);
+
+      // 面积 + 折线（hits）
+      const pts = incr.map((p, i) => `${x(times[i]).toFixed(1)},${y(p.hits || 0).toFixed(1)}`).join(' ');
+      const areaPts = `${pad.l},${pad.t + ih} ` + pts + ` ${(w - pad.r).toFixed(1)},${pad.t + ih}`;
+      const area = document.createElementNS(NS, 'polygon');
+      area.setAttribute('points', areaPts); area.setAttribute('fill', 'var(--accent)'); area.setAttribute('class', 'area-fill');
+      svgEl.appendChild(area);
+
+      const poly = document.createElementNS(NS, 'polyline');
+      poly.setAttribute('points', pts); poly.setAttribute('fill', 'none'); poly.setAttribute('stroke', 'var(--accent)'); poly.setAttribute('stroke-width', '2'); poly.setAttribute('stroke-linejoin', 'round');
+      svgEl.appendChild(poly);
+
+      // written 折线（淡化）
+      if (maxW > 0) {
+        const wPts = incr.map((p, i) => `${x(times[i]).toFixed(1)},${y(p.written || 0).toFixed(1)}`).join(' ');
+        const wp = document.createElementNS(NS, 'polyline');
+        wp.setAttribute('points', wPts); wp.setAttribute('fill', 'none'); wp.setAttribute('stroke', '#9aa6b2'); wp.setAttribute('stroke-width', '1.5'); wp.setAttribute('stroke-dasharray', '3 3'); wp.setAttribute('opacity', '.7');
+        svgEl.appendChild(wp);
+      }
+
+      // 数据点 + 悬停命中区
+      if (incr.length > 1 && (w - pad.l - pad.r) / incr.length < 8) {
+        // 点过于密集时只画命中圆，不画实点
+      } else {
+        incr.forEach((p, i) => {
+          const c = document.createElementNS(NS, 'circle');
+          c.setAttribute('cx', x(times[i])); c.setAttribute('cy', y(p.hits || 0)); c.setAttribute('r', 2.6);
+          c.setAttribute('fill', 'var(--accent)');
+          svgEl.appendChild(c);
+        });
+      }
+      incr.forEach((p, i) => {
+        const h = document.createElementNS(NS, 'circle');
+        h.setAttribute('cx', x(times[i])); h.setAttribute('cy', y(p.hits || 0)); h.setAttribute('r', 9);
+        h.setAttribute('class', 'hit'); h.dataset.i = i;
+        h.addEventListener('mouseenter', e => showTip(i, e));
+        h.addEventListener('mousemove', e => moveTip(e));
+        h.addEventListener('mouseleave', hideTip);
+        svgEl.appendChild(h);
+      });
+    }
+
+    function showTip(i, e) {
+      curHover = i;
+      const p = incr[i];
+      const tf = t => new Date((p.window && p.window.start ? p.window.start : p.atStr)).toTimeString().slice(0, 8);
+      tipEl.innerHTML =
+        `<div class="t-title">${tf()}　${p.window && p.window.start ? p.window.start.slice(0,10) : ''}</div>` +
+        `<div class="t-row"><span>hits</span><b>${p.hits||0}</b></div>` +
+        `<div class="t-row"><span>written</span><b>${p.written||0}</b></div>` +
+        `<div class="t-row"><span>耗时</span><b>${p.durationMs}ms</b></div>` +
+        `<div class="t-row"><span>状态</span><b class="${p.success?'t-ok':'t-fail'}">${p.success?'成功':'失败'}</b></div>`;
+      tipEl.style.opacity = 1;
+      moveTip(e);
+    }
+    function moveTip(e) {
+      const rect = stage.getBoundingClientRect();
+      let cx = e.clientX - rect.left;
+      cx = Math.min(Math.max(cx, 80), rect.width - 80);
+      tipEl.style.left = cx + 'px';
+      tipEl.style.top = (e.clientY - rect.top) + 'px';
+    }
+    function hideTip() {
+      curHover = -1;
+      tipEl.style.opacity = 0;
+    }
+    stage.addEventListener('mouseleave', () => { hideTip(); });
+
+    function drawIncr() {
+      const w = stage.clientWidth, h = stage.clientHeight;
+      if (w < 40 || h < 40) return;
+      renderIncrChart(w, h);
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(drawIncr).observe(stage);
+    }
+    window.addEventListener('resize', drawIncr);
+
+    /* ================= 补全进度 ================= */
+    function addIncr(pt) {
+      incr.push(pt);
+      if (incr.length > MAX) incr.shift();
+      drawIncr();
+      const tb = document.getElementById('incrTbl');
+      tb.insertAdjacentHTML('afterbegin', incrRowHtml(pt));
+      while (tb.rows.length > ROWS) tb.deleteRow(-1);
+
+      ['es','parse','adb'].forEach(id => {
+        document.getElementById(id).classList.add('on');
+        setTimeout(() => document.getElementById(id).classList.remove('on'), 800);
+      });
+    }
+
+    function renderBf(pt) {
+      const pct = pt.percent || 0;
+      document.getElementById('bfBar').style.width = pct + '%';
+      document.getElementById('bfPct').textContent = (pct.toFixed(1) || '0') + '%';
+      document.getElementById('bfDone').textContent = `${(pt.completed||0)+(pt.failed||0)}/${pt.totalWindows||0} 窗口`;
+      document.getElementById('bfTxt').textContent =
+        `命中 ${pt.totalHits||0} · 写入 ${pt.totalWritten||0} · 失败 ${pt.failed||0}` +
+        (pt.rangeStart ? `　[${pt.rangeStart} ~ ${pt.rangeEnd||''})` : '');
+      if (pt.totalWindows) {
+        document.getElementById('kpiBf').textContent = (pct.toFixed(0)||0) + '%';
+        document.getElementById('kpiBfSub').textContent = `${(pt.completed||0)+(pt.failed||0)}/${pt.totalWindows||0} 窗口`;
+      }
+    }
+
+    function addBf(pt) {
+      renderBf(pt);
+    }
+
+    function loadHistory(h) {
+      if (h.incremental) { incr.length = 0; incr.push(...h.incremental.slice(-MAX)); }
+      drawIncr();
+      buildIncrTable();
+      if (h.backfill && h.backfill.length) renderBf(h.backfill[h.backfill.length - 1]);
+    }
+
+    function setPipe(p) {
+      document.getElementById('esSt').textContent = p.esReady ? '就绪' : '未就绪';
+      document.getElementById('adbSt').textContent = p.mysqlReady ? '就绪' : '未就绪';
+      document.getElementById('parseSt').textContent = p.lastIncremental
+        ? p.lastIncremental.hits + '条 / ' + p.lastIncremental.durationMs + 'ms' : '等待';
+
+      const tw = p.targetWindow;
+      document.getElementById('info').textContent =
+        `增量${p.incrementalRunning?'运行':'停'} · ${p.intervalSec}s/lag${p.lagSec}s · ${tw?tw.start.slice(11)+'~'+tw.end.slice(11):'--'} · 补全${p.backfillActive?'中':'闲'}`;
+
+      // KPI
+      const incrDot = document.getElementById('kpiIncrDot');
+      incrDot.className = 'dot ' + (p.incrementalRunning ? 'on' : 'off');
+      incrDot.textContent = p.incrementalRunning ? '▶' : '‖';
+      document.getElementById('kpiIncr').textContent = p.incrementalRunning ? '运行中' : '已停止';
+      document.getElementById('kpiIncrSub').textContent = p.lastIncremental
+        ? '最近 ' + p.lastIncremental.hits + ' 条 / ' + p.lastIncremental.durationMs + 'ms' : '等待数据';
+
+      document.getElementById('kpiLoop').textContent = p.intervalSec + 's / 次';
+      document.getElementById('kpiLagSub').textContent = 'lag ' + p.lagSec + 's';
+
+      document.getElementById('kpiWin').textContent = tw ? tw.start.slice(11) + ' ~ ' + tw.end.slice(11) : '--';
+
+      const bfDot = document.getElementById('kpiBfDot');
+      bfDot.className = 'dot ' + (p.backfillActive ? 'on' : '');
+      bfDot.textContent = p.backfillActive ? '◷' : '✓';
+    }
+
+    function setConn(state) {
+      const el = document.getElementById('connBadge');
+      if (state === 'open') { el.textContent = '● SSE 已连接'; el.className = 'ok'; }
+      else if (state === 'connecting') { el.textContent = 'SSE 重连中…'; el.className = ''; }
+      else { el.textContent = '● SSE 断开'; el.className = 'err'; }
+    }
+
+    async function apiPost(url, body) {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return res.json();
+    }
+
+    async function doBackfill() {
+      const start = document.getElementById('bfStart').value.trim();
+      const end = document.getElementById('bfEnd').value.trim();
+      if (!start) { alert('请填写开始时间'); return; }
+      const btn = document.getElementById('btnBackfill');
+      const box = document.getElementById('bfResult');
+      btn.disabled = true;
+      box.className = 'result';
+      box.textContent = '补全进行中，请稍候（范围大可能较久）...';
+      log('[补全] 开始 ' + start + (end ? ' ~ ' + end : ''));
+      try {
+        const resp = await apiPost('/sync/backfill', { start, end: end || undefined });
+        if (resp.code !== 0) {
+          box.className = 'result fail';
+          box.textContent = '失败: ' + resp.message;
+          log('[补全] 失败: ' + resp.message, true);
+          return;
+        }
+        const s = resp.data.summary;
+        box.className = 'result ok';
+        box.textContent = `完成 · 窗口 ${s.totalWindows} · hits ${s.totalHits} · 写入 ${s.totalWritten} · 失败 ${s.failed}`;
+        log('[补全] 完成 hits=' + s.totalHits + ' written=' + s.totalWritten);
+      } catch (e) {
+        box.className = 'result fail';
+        box.textContent = '请求失败: ' + e.message;
+        log('[补全] 请求失败', true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function doCompare() {
+      const start = document.getElementById('cmpStart').value.trim();
+      const end = document.getElementById('cmpEnd').value.trim();
+      const btn = document.getElementById('btnCompare');
+      btn.disabled = true;
+      log('[对比] 查询 ' + (start || '默认窗口') + (end ? ' ~ ' + end : ''));
+      try {
+        const resp = await apiPost('/sync/compare', { start, end });
+        if (resp.code !== 0) {
+          alert('对比失败: ' + resp.message);
+          log('[对比] 失败: ' + resp.message, true);
+          return;
+        }
+        const d = resp.data;
+        document.getElementById('cmpEs').textContent = d.es.count;
+        document.getElementById('cmpAdb').textContent = d.mysql.count;
+        document.getElementById('cmpDiff').textContent = (d.diff > 0 ? '+' : '') + d.diff;
+        document.getElementById('cmpDiff').className = 'num' + (d.match ? ' diff-zero' : ' diff-pos');
+        document.getElementById('cmpRange').textContent =
+          `[${d.range.start} ~ ${d.range.end}) · ${d.match ? '一致 ✓' : '不一致 ✗'}`;
+        log('[对比] ES=' + d.es.count + ' ADB=' + d.mysql.count + ' diff=' + d.diff);
+      } catch (e) {
+        alert('请求失败: ' + e.message);
+        log('[对比] 请求失败', true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    /* ================= 服务状态 runtime ================= */
+    function fmtUptime(sec) {
+      sec = Math.floor(sec || 0);
+      const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+      const p = n => String(n).padStart(2, '0');
+      return d > 0 ? `${d}天 ${p(h)}:${p(m)}:${p(s)}` : `${p(h)}:${p(m)}:${p(s)}`;
+    }
+    function fmtMB(mb) { return (mb != null ? mb : 0).toFixed(1) + ' MB'; }
+    function onRuntime(p) {
+      document.getElementById('rtUptime').textContent = '运行 ' + fmtUptime(p.uptimeSec);
+      document.getElementById('rtGoroutines').textContent = (p.goroutines||0) + ' 个';
+      document.getElementById('rtCPU').textContent = (p.goMaxProcs||p.numCPU||0) + ' / ' + (p.numCPU||0);
+      document.getElementById('rtAlloc').textContent = fmtMB(p.allocMB);
+      document.getElementById('rtHeap').textContent = fmtMB(p.heapSysMB);
+      document.getElementById('rtSys').textContent = fmtMB(p.sysMB);
+      document.getElementById('rtTotal').textContent = fmtMB(p.totalAllocMB);
+      document.getElementById('rtGc').textContent = (p.numGC||0) + ' / ' + (p.pauseTotalSec||0).toFixed(2);
+      document.getElementById('rtGo').textContent = p.goVersion || '--';
+    }
+
+    const es = new EventSource('/monitor/sse');
+    es.onopen = () => setConn('open');
+    es.onerror = () => setConn(es.readyState === EventSource.CONNECTING ? 'connecting' : 'closed');
+    es.addEventListener('history', e => loadHistory(JSON.parse(e.data)));
+    es.addEventListener('pipeline', e => setPipe(JSON.parse(e.data)));
+    es.addEventListener('incremental', e => addIncr(JSON.parse(e.data)));
+    es.addEventListener('backfill', e => addBf(JSON.parse(e.data)));
+    es.addEventListener('runtime', e => onRuntime(JSON.parse(e.data)));
+
+    // 初始化绘制
+    requestAnimationFrame(drawIncr);
+  </script>
+</body>
+</html>

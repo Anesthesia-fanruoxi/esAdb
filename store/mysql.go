@@ -9,16 +9,18 @@ import (
 	"esAdb/model"
 
 	"github.com/jmoiron/sqlx"
+	_ "github.com/go-sql-driver/mysql" // 注册 database/sql mysql 驱动
 )
 
 // MySQLStore 阿里云 ADB / MySQL 数据访问（sqlx，手写 SQL）
 type MySQLStore struct {
-	db    *sqlx.DB
-	table string
+	db        *sqlx.DB
+	table     string
+	batchSize int // 单条 REPLACE INTO 最大行数
 }
 
 // NewMySQLStore 连接数据库并确保表结构就绪
-func NewMySQLStore(cfg config.MySQLConfig) (*MySQLStore, error) {
+func NewMySQLStore(cfg config.MySQLConfig, batchSize int) (*MySQLStore, error) {
 	if strings.TrimSpace(cfg.DSN) == "" {
 		return nil, fmt.Errorf("MySQL 未配置")
 	}
@@ -33,7 +35,10 @@ func NewMySQLStore(cfg config.MySQLConfig) (*MySQLStore, error) {
 	db.SetMaxOpenConns(20)
 	db.SetMaxIdleConns(5)
 
-	s := &MySQLStore{db: db, table: model.GetTableName()}
+	s := &MySQLStore{db: db, table: model.GetTableName(), batchSize: batchSize}
+	if s.batchSize <= 0 {
+		s.batchSize = 1000
+	}
 	if err := s.ensureSchema(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -161,7 +166,10 @@ func (s *MySQLStore) BatchInsertIgnore(logs []*model.EventLog) (written int, rep
 	cols := strings.Join(model.Columns, ", ")
 	oneRow := "(" + strings.TrimRight(strings.Repeat("?,", len(model.Columns)), ",") + ")"
 
-	const chunk = 200
+	chunk := s.batchSize
+	if chunk <= 0 {
+		chunk = 1000
+	}
 	for i := 0; i < len(logs); i += chunk {
 		end := i + chunk
 		if end > len(logs) {
@@ -193,6 +201,18 @@ func (s *MySQLStore) BatchInsertIgnore(logs []*model.EventLog) (written int, rep
 		}
 	}
 	return written, replacedHint, nil
+}
+
+// CountByEsTimestamp 统计 es_timestamp 在 [startMs, endMs) 内的行数
+func (s *MySQLStore) CountByEsTimestamp(startMs, endMs int64) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("MySQL 未初始化")
+	}
+	var cnt int
+	err := s.db.Get(&cnt, fmt.Sprintf(
+		"SELECT COUNT(*) FROM %s WHERE es_timestamp >= ? AND es_timestamp < ?",
+		quoteTable(s.table)), startMs, endMs)
+	return cnt, err
 }
 
 // BuildFromESRecords 解析 ES 记录为模型（带 es_timestamp 毫秒）
