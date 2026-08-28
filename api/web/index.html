@@ -556,7 +556,7 @@
         <div class="card" style="flex:1 1 46%;min-height:240px">
           <div class="card-head">
             <h2>增量写入</h2>
-            <span class="tag">最近 1 小时 · 内存仅保留 120 条</span>
+            <span class="tag">最近 1 小时 · 内存保留 360 条</span>
           </div>
           <div class="incr-content">
             <div class="incr-legend">
@@ -572,7 +572,7 @@
         </div>
 
         <div class="card" style="flex:1 1 54%;min-height:180px">
-          <div class="card-head"><h2>最近增量</h2><span class="tag">最新 20 条</span></div>
+          <div class="card-head"><h2>最近增量</h2><span class="tag">最新 360 条 · 与增量写入一致</span></div>
           <div class="card-body table-wrap" style="padding:0 6px 8px">
             <table>
               <thead><tr><th>时间</th><th>窗口</th><th>hits</th><th>written</th><th>耗时</th><th>状态</th></tr></thead>
@@ -731,8 +731,8 @@
 
   <script>
     const incr = [];
-    const MAX = 120; // 后端内存只保留最近一小时（约 120 条）
-    const ROWS = 100; // 最近增量表格显示条数
+    const MAX = 360; // 增量内存保留最近一小时（约 10s/条 × 60min = 360 条）
+    const ROWS = 360; // 最近增量表格显示条数，与增量写入保持一致
     let pipeCfg = { intervalSec: 10, lagSec: 60 };
     let compareReady = false;
 
