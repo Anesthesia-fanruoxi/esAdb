@@ -85,12 +85,30 @@ func LagMs(lagSec int) int64 {
 	return int64(lagSec) * 1000
 }
 
-// AlignFloorMs 从 0 毫秒起向下对齐：aligned = ms - ms%intervalMs
+// AlignFloorMs 从 0（UTC epoch）毫秒起向下对齐：aligned = ms - ms%intervalMs
+// 注意：仅适用于小于一天的间隔（时分秒，本地时区按整点/整秒偏移时与 epoch 对齐一致）。
+// 对"整天及整数天"的间隔勿用本函数，请用 AlignFloorLocalMs，否则会按 UTC 零点而非本地零点对齐，产生时差（如 UTC+8 偏 8h）。
 func AlignFloorMs(ms, intervalMs int64) int64 {
 	if intervalMs <= 0 {
 		intervalMs = IntervalMs(DefaultIntervalSec)
 	}
 	return ms - (ms % intervalMs)
+}
+
+// alignRefLocalMs 本地时区 1970-01-01 00:00（本地午夜锚点）。
+// 以它为基准对齐，就能让"整天"的窗口落在本地零点，而不是 UTC 零点。
+var alignRefLocalMs = func() int64 {
+	return time.Date(1970, 1, 1, 0, 0, 0, 0, time.Local).UnixMilli()
+}()
+
+// AlignFloorLocalMs 在本地时区语义下向下对齐区间边界（含整天/多天间隔）。
+// 对整天倍数间隔：落在本地零点，避免按 UTC 对齐导致日窗口跨本地日期（如 UTC+8 时偏移 8h）。
+// 对小一天间隔：alignRefLocalMs 为本地午夜且能被时分秒整除，结果与 epoch 对齐一致，行为不变。
+func AlignFloorLocalMs(ms, intervalMs int64) int64 {
+	if intervalMs <= 0 {
+		intervalMs = IntervalMs(DefaultIntervalSec)
+	}
+	return alignRefLocalMs + (ms-alignRefLocalMs)/intervalMs*intervalMs
 }
 
 // AlignCeilMs 向上对齐；已在边界则返回自身
@@ -126,7 +144,7 @@ func SplitWindowsMs(rangeStartMs, rangeEndMs, intervalMs int64) []TimeRangeMs {
 	if rangeEndMs <= rangeStartMs {
 		return nil
 	}
-	startMs := AlignFloorMs(rangeStartMs, intervalMs)
+	startMs := AlignFloorLocalMs(rangeStartMs, intervalMs)
 	var out []TimeRangeMs
 	for cur := startMs; cur < rangeEndMs; cur += intervalMs {
 		nxt := cur + intervalMs
@@ -216,11 +234,11 @@ type CompareSide struct {
 
 // CompareResult 对比结果
 type CompareResult struct {
-	Range  TimeRangeMs `json:"range"`
-	ES     CompareSide `json:"es"`
-	MySQL  CompareSide `json:"mysql"`
-	Diff   int         `json:"diff"` // es - mysql
-	Match  bool        `json:"match"`
+	Range TimeRangeMs `json:"range"`
+	ES    CompareSide `json:"es"`
+	MySQL CompareSide `json:"mysql"`
+	Diff  int         `json:"diff"` // es - mysql
+	Match bool        `json:"match"`
 }
 
 // PrevClockHourWindow 上一个整点小时 [本小时整点-1h, 本小时整点)

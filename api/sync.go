@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"esAdb/common"
@@ -30,9 +31,131 @@ type windowRangeReq struct {
 }
 
 type timeReq struct {
-	Start   string          `json:"start"`
-	End     string          `json:"end"`
+	Start   string           `json:"start"`
+	End     string           `json:"end"`
 	Windows []windowRangeReq `json:"windows"`
+}
+
+// winBrief 下钻 done 事件中一次性下发的异常窗口（分析中不下发，减轻 SSE 压力）
+type winBrief struct {
+	Level int    `json:"level"`
+	S     int64  `json:"s"`
+	E     int64  `json:"e"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+	Diff  int    `json:"diff"`
+}
+
+// HandleBackfill GET/POST /sync/backfill  范围补全
+// 入参：{ start, end }（可含 query），由后端按同步 interval/lag 切窗后统一补全。
+// 窗口补全请使用 /sync/backfill/windows。
+func (a *SyncAPI) HandleBackfill(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		common.WriteFail(w, http.StatusMethodNotAllowed, 405, "仅支持 GET/POST")
+		return
+	}
+	if a.mgr == nil || a.mgr.ES == nil || a.mgr.MySQL == nil {
+		common.WriteFail(w, http.StatusServiceUnavailable, 503, "ES 或 MySQL 未就绪")
+		return
+	}
+
+	req, err := a.parseTimeReq(r)
+	if err != nil {
+		common.WriteFail(w, http.StatusBadRequest, 1, "请求体格式错误")
+		return
+	}
+
+	// 范围补全（连续范围，先切窗再补全）
+	if req.Start == "" {
+		common.WriteFail(w, http.StatusBadRequest, 2, "缺少 start")
+		return
+	}
+
+	startMs, err := common.ParseTimeInput(req.Start)
+	if err != nil {
+		common.WriteFail(w, http.StatusBadRequest, 3, err.Error())
+		return
+	}
+	endMs, err := parseOptionalMs(req.End)
+	if err != nil {
+		common.WriteFail(w, http.StatusBadRequest, 4, err.Error())
+		return
+	}
+
+	plan, err := common.CalcBackfillPlan(startMs, endMs, a.cfg.Sync.Interval, a.cfg.Sync.LagSeconds, time.Now())
+	if err != nil {
+		common.WriteFail(w, http.StatusBadRequest, 5, err.Error())
+		return
+	}
+
+	common.Info("[backfill] 开始范围补全 totalWindows=%d range=[%s, %s)",
+		plan.TotalWindows, plan.RangeStart.Time, plan.RangeEnd.Time)
+
+	summary := a.mgr.BackfillWindows(plan.Windows, plan.RangeStart.Time, plan.RangeEnd.Time)
+	common.Info("[backfill] 完成 hits=%d written=%d failed=%d",
+		summary.TotalHits, summary.TotalWritten, summary.Failed)
+
+	common.WriteOK(w, map[string]interface{}{
+		"plan":    plan,
+		"summary": summary,
+	})
+}
+
+// HandleBackfillWindows POST /sync/backfill/windows  窗口补全（支持多个不连续窗口）
+// 入参：{ windows:[{startMs,endMs},...] }，直接按给定窗口补全，不做切窗。
+func (a *SyncAPI) HandleBackfillWindows(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		common.WriteFail(w, http.StatusMethodNotAllowed, 405, "仅支持 POST")
+		return
+	}
+	if a.mgr == nil || a.mgr.ES == nil || a.mgr.MySQL == nil {
+		common.WriteFail(w, http.StatusServiceUnavailable, 503, "ES 或 MySQL 未就绪")
+		return
+	}
+
+	req, err := a.parseTimeReq(r)
+	if err != nil {
+		common.WriteFail(w, http.StatusBadRequest, 1, "请求体格式错误")
+		return
+	}
+	if len(req.Windows) == 0 {
+		common.WriteFail(w, http.StatusBadRequest, 11, "缺少 windows")
+		return
+	}
+	if len(req.Windows) > 4000 {
+		common.WriteFail(w, http.StatusBadRequest, 12, "单次补全窗口数不能超过 4000")
+		return
+	}
+	seen := make(map[int64]bool, len(req.Windows))
+	windows := make([]common.TimeRangeMs, 0, len(req.Windows))
+	for _, wr := range req.Windows {
+		if wr.EndMs <= wr.StartMs {
+			common.WriteFail(w, http.StatusBadRequest, 13, "窗口无效: endMs 需大于 startMs")
+			return
+		}
+		if seen[wr.StartMs] {
+			continue
+		}
+		seen[wr.StartMs] = true
+		windows = append(windows, common.NewTimeRangeMs(wr.StartMs, wr.EndMs))
+	}
+	if len(windows) == 0 {
+		common.WriteFail(w, http.StatusBadRequest, 14, "windows 去重后为空")
+		return
+	}
+	sort.Slice(windows, func(i, j int) bool { return windows[i].StartMs < windows[j].StartMs })
+
+	rangeStart := common.FormatMs(windows[0].StartMs)
+	rangeEnd := common.FormatMs(windows[len(windows)-1].EndMs)
+	common.Info("[backfill] 按窗口补全 n=%d range=[%s, %s)", len(windows), rangeStart, rangeEnd)
+
+	summary := a.mgr.BackfillWindows(windows, rangeStart, rangeEnd)
+	common.Info("[backfill] 完成 hits=%d written=%d failed=%d",
+		summary.TotalHits, summary.TotalWritten, summary.Failed)
+	common.WriteOK(w, map[string]interface{}{
+		"windows": len(windows),
+		"summary": summary,
+	})
 }
 
 func (a *SyncAPI) parseTimeReq(r *http.Request) (timeReq, error) {
@@ -57,102 +180,6 @@ func parseOptionalMs(s string) (int64, error) {
 		return 0, nil
 	}
 	return common.ParseTimeInput(s)
-}
-
-// HandleBackfill GET/POST /sync/backfill  补全同步
-// 支持两种入参（二选一）：
-//  1) 连续范围：{ start, end }（可含 query），内部切窗后补全
-//  2) 按窗口列表（不连续，用于补全三级下钻定位的异常窗口）：{ windows:[{startMs,endMs}] }
-// 两种方式最终都走 store.BackfillWindows，仅入参切窗方式不同
-func (a *SyncAPI) HandleBackfill(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		common.WriteFail(w, http.StatusMethodNotAllowed, 405, "仅支持 GET/POST")
-		return
-	}
-	if a.mgr == nil || a.mgr.ES == nil || a.mgr.MySQL == nil {
-		common.WriteFail(w, http.StatusServiceUnavailable, 503, "ES 或 MySQL 未就绪")
-		return
-	}
-
-	req, err := a.parseTimeReq(r)
-	if err != nil {
-		common.WriteFail(w, http.StatusBadRequest, 1, "请求体格式错误")
-		return
-	}
-
-	// 方式二：按显式窗口列表补全（不连续）
-	if len(req.Windows) > 0 {
-		if len(req.Windows) > 4000 {
-			common.WriteFail(w, http.StatusBadRequest, 12, "单次补全窗口数不能超过 4000")
-			return
-		}
-		seen := make(map[int64]bool, len(req.Windows))
-		windows := make([]common.TimeRangeMs, 0, len(req.Windows))
-		for _, wr := range req.Windows {
-			if wr.EndMs <= wr.StartMs {
-				common.WriteFail(w, http.StatusBadRequest, 13, "窗口无效: endMs 需大于 startMs")
-				return
-			}
-			if seen[wr.StartMs] {
-				continue
-			}
-			seen[wr.StartMs] = true
-			windows = append(windows, common.NewTimeRangeMs(wr.StartMs, wr.EndMs))
-		}
-		if len(windows) == 0 {
-			common.WriteFail(w, http.StatusBadRequest, 14, "windows 去重后为空")
-			return
-		}
-		sort.Slice(windows, func(i, j int) bool { return windows[i].StartMs < windows[j].StartMs })
-
-		rangeStart := common.FormatMs(windows[0].StartMs)
-		rangeEnd := common.FormatMs(windows[len(windows)-1].EndMs)
-		common.Info("[backfill] 按窗口列表补全 n=%d range=[%s, %s)", len(windows), rangeStart, rangeEnd)
-
-		summary := a.mgr.BackfillWindows(windows, rangeStart, rangeEnd)
-		common.Info("[backfill] 完成 hits=%d written=%d failed=%d",
-			summary.TotalHits, summary.TotalWritten, summary.Failed)
-		common.WriteOK(w, map[string]interface{}{
-			"windows": len(windows),
-			"summary": summary,
-		})
-		return
-	}
-
-	// 方式一：连续范围补全
-	if req.Start == "" {
-		common.WriteFail(w, http.StatusBadRequest, 2, "缺少 start")
-		return
-	}
-
-	startMs, err := common.ParseTimeInput(req.Start)
-	if err != nil {
-		common.WriteFail(w, http.StatusBadRequest, 3, err.Error())
-		return
-	}
-	endMs, err := parseOptionalMs(req.End)
-	if err != nil {
-		common.WriteFail(w, http.StatusBadRequest, 4, err.Error())
-		return
-	}
-
-	plan, err := common.CalcBackfillPlan(startMs, endMs, a.cfg.Sync.Interval, a.cfg.Sync.LagSeconds, time.Now())
-	if err != nil {
-		common.WriteFail(w, http.StatusBadRequest, 5, err.Error())
-		return
-	}
-
-	common.Info("[backfill] 开始补全 totalWindows=%d range=[%s, %s)",
-		plan.TotalWindows, plan.RangeStart.Time, plan.RangeEnd.Time)
-
-	summary := a.mgr.BackfillWindows(plan.Windows, plan.RangeStart.Time, plan.RangeEnd.Time)
-	common.Info("[backfill] 完成 hits=%d written=%d failed=%d",
-		summary.TotalHits, summary.TotalWritten, summary.Failed)
-
-	common.WriteOK(w, map[string]interface{}{
-		"plan":    plan,
-		"summary": summary,
-	})
 }
 
 // HandleCompare GET/POST /sync/compare  对比 ES 与 ADB 条数
@@ -205,9 +232,10 @@ func (a *SyncAPI) HandleCompare(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleCompareDrilldownSSE GET /sync/compare/drilldown/sse
-// 三级下钻找出异常时间窗（默认 小时 → 5分钟 → 10 秒），
-// 每窗口算完以 progress 事件流式返回；每级结束再发 levelN 汇总；最后 done
-// query: start, end, workers(默认12), 可选 l1/l2/l3 为秒，覆盖各级粒度
+// 金字塔逐级下钻找出异常时间窗（默认 日 → 小时 → 5分钟 → 10 秒）。
+// 分析过程中仅逐级回传数量事件 levelN（驱动前端 4 段进度条，不下发明细以减轻 SSE 压力），
+// 全部完成后于 done 一次性下发全量异常窗口。
+// query: start, end, workers(默认12), 可选 l1/l2/l3/l4 为秒，覆盖各级粒度
 func (a *SyncAPI) HandleCompareDrilldownSSE(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		common.WriteFail(w, http.StatusMethodNotAllowed, 405, "仅支持 GET")
@@ -232,11 +260,27 @@ func (a *SyncAPI) HandleCompareDrilldownSSE(w http.ResponseWriter, r *http.Reque
 		return def
 	}
 	workers := parseIntQ("workers", 12)
-	// 各级粒度（秒），默认 小时 / 5分钟 / 10秒
-	levelSecs := []int64{
-		int64(parseIntQ("l1", 3600)),
-		int64(parseIntQ("l2", 300)),
-		int64(parseIntQ("l3", 10)),
+	// 各级粒度（秒），默认 日 / 小时 / 5分钟 / 10秒（金字塔剪枝，支持对比整月）。
+	// 传 0 表示本层不下钻（只跑前几层）
+	parseLvl := func(key string, def int) int {
+		if v := r.URL.Query().Get(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				return n
+			}
+		}
+		return def
+	}
+	levelSecs := make([]int64, 0, 4)
+	for _, kv := range []struct {
+		k   string
+		def int
+	}{{"l1", 86400}, {"l2", 3600}, {"l3", 300}, {"l4", 10}} {
+		if n := parseLvl(kv.k, kv.def); n > 0 {
+			levelSecs = append(levelSecs, int64(n))
+		}
+	}
+	if len(levelSecs) == 0 {
+		levelSecs = []int64{86400, 3600, 300, 10}
 	}
 	levelMs := make([]int64, len(levelSecs))
 	for i, s := range levelSecs {
@@ -264,12 +308,17 @@ func (a *SyncAPI) HandleCompareDrilldownSSE(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	var sendMu sync.Mutex
 	send := func(event string, data interface{}) bool {
 		b, err := common.MarshalJSON(data, false)
 		if err != nil {
+			common.Warn("[drilldown] SSE 序列化失败 event=%s: %s", event, err.Error())
 			return false
 		}
+		sendMu.Lock()
+		defer sendMu.Unlock()
 		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b); err != nil {
+			common.Warn("[drilldown] SSE 写入失败 event=%s: %s", event, err.Error())
 			return false
 		}
 		flusher.Flush()
@@ -280,24 +329,39 @@ func (a *SyncAPI) HandleCompareDrilldownSSE(w http.ResponseWriter, r *http.Reque
 		win.Start, win.End, workers, levelSecs[0], levelSecs[1], levelSecs[2])
 
 	if !send("range", win) {
+		common.Warn("[drilldown] range 事件发送失败，连接可能已断开")
 		return
 	}
+	common.Info("[drilldown] range 事件已发送")
 
-	levels, err := a.mgr.DrilldownLevels(r.Context(), win, levelMs, workers, func(_ int, s store.DrillStatus) {
-		send("progress", s)
-	})
+	// 每个窗口算完即推送一次进度计数 progress {level,done,total}（不含窗口明细），
+	// 前端据此按「(第level-1级)+done/total」换算成 4 段 25% 的精确进度；
+	// 全部完成后再于 done 一次性下发全量异常窗口，最大化减少 SSE 明细传输。
+	levels, err := a.mgr.DrilldownLevels(r.Context(), win, levelMs, workers, nil,
+		func(level, done, total int) {
+			// 每个窗口算完即推送一次进度计数，只带数量、不含窗口明细；
+			// 不在此处写日志，避免第 4 级(可达数千窗)刷屏
+			send("progress", map[string]int{"level": level, "done": done, "total": total})
+		})
 	if err != nil {
+		common.Error("[drilldown] 下钻失败: %s", err.Error())
 		send("error", map[string]string{"message": err.Error()})
 		return
 	}
-	for _, lv := range levels {
-		if !send(fmt.Sprintf("level%d", lv.Level), lv) {
-			return
-		}
-	}
 	lastAbnormal := 0
+	wins := make([]winBrief, 0, 8)
 	if len(levels) > 0 {
 		lastAbnormal = levels[len(levels)-1].Abnormal
+		for _, lv := range levels {
+			for i := range lv.Windows {
+				r := lv.Windows[i]
+				wins = append(wins, winBrief{Level: lv.Level, S: r.Range.StartMs, E: r.Range.EndMs, Start: r.Range.Start, End: r.Range.End, Diff: r.Diff})
+			}
+		}
 	}
-	send("done", map[string]int{"abnormal": lastAbnormal})
+	common.Info("[drilldown] 下钻完成 abnormal=%d windows=%d", lastAbnormal, len(wins))
+	send("done", map[string]interface{}{
+		"abnormal": lastAbnormal,
+		"windows":  wins,
+	})
 }

@@ -22,6 +22,7 @@ func New(cfg *config.Config, mgr *store.Manager) http.Handler {
 		common.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("/sync/backfill", syncAPI.HandleBackfill)
+	mux.HandleFunc("/sync/backfill/windows", syncAPI.HandleBackfillWindows)
 	mux.HandleFunc("/sync/compare", syncAPI.HandleCompare)
 	mux.HandleFunc("/sync/compare/drilldown/sse", syncAPI.HandleCompareDrilldownSSE)
 

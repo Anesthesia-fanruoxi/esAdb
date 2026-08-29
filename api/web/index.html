@@ -1,8 +1,7 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+<html lang="zh-CN"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>es-adb 同步监控</title>
   <style>
     :root {
@@ -451,17 +450,83 @@
     .an-tab { padding: 4px 12px; font-size: .74rem; border-radius: 6px; cursor: pointer;
       border: 1px solid var(--border-soft, #d7e0e5); background: #f4f7f9; color: var(--text, #1c2b33); }
     .an-tab.active { background: var(--primary, #0f766e); color: #fff; border-color: transparent; }
-    .an-pane { display: none; margin-top: 8px; max-height: 220px; overflow: auto; padding-right: 4px; }
+    .an-pane { display: none; margin-top: 8px; overflow: auto; padding-right: 4px; }
     .an-pane.active { display: block; }
-    .an-grp { margin-bottom: 8px; }
-    .an-grp-label { font-size: .68rem; color: var(--muted, #6b7a82); margin-bottom: 4px; }
-    .an-grid { display: flex; flex-wrap: wrap; gap: 4px; }
-    .acell { width: 20px; height: 20px; border-radius: 4px; background: #eef2f4;
-      border: 1px solid #d7e0e5; cursor: default; }
-    .acell.ok { background: #cfe8d6; border-color: #8fcaa4; }
-    .acell.bad { background: #f7cdd4; border-color: #ef9fab; }
-    .an-legend { display: flex; gap: 12px; margin-top: 6px; font-size: .66rem; color: var(--muted, #6b7a82); }
-    .an-legend .acell { width: 12px; height: 12px; display: inline-block; vertical-align: -2px; }
+
+    /* 精准分析弹框 */
+    .an-modal { width: 85vw; height: 85vh; max-width: 85vw; max-height: 85vh; }
+    .an-modal-body { overflow: hidden; }
+    .an-modal .an-pane.active { flex: 1; min-height: 0; overflow-y: auto; }
+
+    /* 精准分析结果表格 */
+    .an-table { width: 100%; border-collapse: collapse; font-size: .72rem; }
+    .an-table th, .an-table td { padding: 6px 10px; border-bottom: 1px solid var(--border-soft, #e2e8ee); white-space: nowrap; text-align: left; }
+    .an-table thead th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--surface, #fff); color: var(--muted, #5b6b76); font-weight: 650;
+      border-bottom: 2px solid var(--border, #cbd5e0);
+    }
+    .an-table th.num, .an-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .an-table th.win, .an-table td.win { min-width: 180px; }
+    .an-table th.st, .an-table td.st { text-align: center; width: 44px; }
+    .an-table td.st::before { content: '…'; color: #9aa6b2; font-weight: 700; }
+    .an-table tr.ok td { background: #f0faf4; }
+    .an-table tr.ok td.st::before { content: '✔'; color: #16855e; }
+    .an-table tr.bad td { background: #fdf1f0; }
+    .an-table tr.bad td.st::before { content: '✘'; color: #d23b2f; }
+    .an-table tr.bad td.diff { color: #d23b2f; font-weight: 700; }
+    .an-table tr.pending td.st::before { content: '…'; color: #9aa6b2; }
+    .an-table tr.clickable { cursor: pointer; }
+    .an-table tr.clickable:hover td { background: #fff6e6; }
+
+    /* 整体统计 + 操作条 */
+    .an-summary { margin-top: 8px; }
+    .an-summary-inner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px;
+      background: #eef7f8; border: 1px solid var(--border-soft, #d7e0e5); border-radius: 8px; font-size: .74rem; color: var(--text, #1c2b33); }
+    /* 分析总览（结束后按天汇总 + 操作） */
+    .an-modal-body { display: flex; flex-direction: column; }
+    .an-drill { margin-top: 8px; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .an-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; flex: 1; min-height: 0; }
+    .an-col { display: flex; flex-direction: column; border: 1px solid var(--border-soft, #d7e0e5); border-radius: 8px; overflow: hidden; min-height: 160px; }
+    .an-col-title { padding: 6px 10px; font-size: .72rem; font-weight: 650; background: #f2f7f8; border-bottom: 1px dashed var(--border-soft, #d7e0e5); }
+    .an-col-title i { font-style: normal; color: var(--primary, #0f766e); margin-right: 4px; }
+    .an-col-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px; }
+    .an-cell { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 6px 8px; border: none; background: transparent; border-radius: 6px; cursor: pointer; font-size: .72rem; }
+    .an-cell:hover { background: var(--border-soft, #eef2f4); }
+    .an-cell.active { background: rgba(15, 118, 110, .10); outline: 1px solid var(--primary, #0f766e); }
+    .an-cell-t { font-weight: 600; }
+    .an-cell-n { color: var(--muted, #6b7a82); font-size: .66rem; }
+    .an-cell-btns { margin-left: auto; display: flex; gap: 4px; align-items: center; }
+    .an-cell-btn { color: var(--primary, #0f766e); font-size: .64rem; }
+    .an-cell-back { font-size: .62rem; }
+    .an-empty { padding: 10px; text-align: center; color: var(--faint, #9fb0b8); font-size: .68rem; }
+    .an-overview { margin-top: 8px; }
+    .an-overview-title { font-size: .72rem; font-weight: 650; color: var(--text, #1c2b33); margin-bottom: 4px; }
+    .an-bar { height: 6px; border-radius: 4px; background: #e6ebef; margin-top: 8px; overflow: hidden; }
+    .an-bar-fill { height: 100%; width: 0; background: var(--primary, #0f766e); transition: width .25s ease; }
+    .an-day { border: 1px solid var(--border-soft, #d7e0e5); border-radius: 8px; margin-top: 6px; overflow: hidden; }
+    .an-day-head { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: #f2f7f8; font-size: .74rem; cursor: pointer; }
+    .an-day-date { font-weight: 650; }
+    .an-day-chip { font-size: .68rem; color: var(--muted, #6b7a82); }
+    .an-day-btns { margin-left: auto; display: flex; gap: 6px; }
+    .an-day-body { display: none; }
+    .an-day.open .an-day-body { display: block; }
+    .an-drop { display: flex; align-items: center; gap: 10px; font-size: .74rem; color: var(--muted, #6b7a82); }
+    .an-drop .btn-mini { font-size: .66rem; }
+    .an-drop-row { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-top: 1px dashed var(--border-soft, #d7e0e5); font-size: .72rem; }
+    .an-drop-row .num { min-width: 54px; }
+    .an-crumb { margin-top: 8px; font-size: .7rem; color: var(--muted, #6b7a82); }
+    .an-ops { flex-shrink: 0; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--primary, #0f766e);
+      border-radius: 8px; background: #f0fbfa; display: flex; align-items: center; gap: 10px; font-size: .72rem; }
+    .an-ops-btns { margin-left: auto; display: flex; gap: 8px; }
+    .btn-mini { padding: 2px 8px; font-size: .68rem; }
+    .quick-range { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px;
+      font-size: .68rem; color: var(--muted, #6b7a82); }
+    .an-tabs { display: flex; gap: 6px; margin-top: 8px; }
+    .an-tab { padding: 3px 14px; font-size: .72rem; border: 1px solid var(--border, #cbd5e0);
+      border-radius: 14px; background: transparent; color: var(--muted, #5b6b76); cursor: pointer; }
+    .an-tab.active { background: var(--primary, #0f766e); color: #fff; border-color: var(--primary, #0f766e); }
+    .an-table tr.flash td { background: #fff3bf; }
 
     /* 服务状态 */
     .rt-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; }
@@ -514,7 +579,7 @@
         <h1>es-adb 同步监控</h1>
       </div>
       <div class="head-right">
-        <span id="connBadge">SSE 连接中...</span>
+        <span id="connBadge" class="">SSE 重连中…</span>
       </div>
     </header>
 
@@ -522,7 +587,7 @@
     <section class="kpis">
       <div class="kpi">
         <div class="dot" id="kpiIncrDot">→</div>
-        <div class="body">
+        <div class="body" style="font-size: 15px; font-weight: bold">
           <div class="lbl">增量写入</div>
           <div class="val" id="kpiIncr">--</div>
           <div class="sub" id="kpiIncrSub">等待数据</div>
@@ -555,16 +620,7 @@
     </section>
 
     <!-- 数据流 -->
-    <section class="pipeline">
-      <div class="pipe">
-        <div class="box" id="es"><div class="name">ES</div><small id="esSt">--</small></div>
-        <span class="arrow">→</span>
-        <div class="box" id="parse"><div class="name">解析</div><small id="parseSt">--</small></div>
-        <span class="arrow">→</span>
-        <div class="box" id="adb"><div class="name">ADB</div><small id="adbSt">--</small></div>
-      </div>
-      <div class="pipe-info" id="info"></div>
-    </section>
+    
 
     <!-- 主工作区 -->
     <div class="work">
@@ -583,7 +639,7 @@
             </div>
             <div class="chart-stage" id="incrStage">
               <div class="incr-tip" id="incrTip"></div>
-              <svg id="incrSvg"></svg>
+              <svg id="incrSvg"><text x="892" y="185.5" text-anchor="middle" class="axis-text">暂无数据，等待增量事件…</text></svg>
             </div>
           </div>
         </div>
@@ -615,33 +671,39 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h2>补全同步</h2></div>
-          <div class="card-body">
-            <div class="form-row">
-              <label>开始<input type="text" id="bfStart" placeholder="2026-08-28 00:00:00" /></label>
-              <label>结束<input type="text" id="bfEnd" placeholder="可选" /></label>
-              <button class="btn btn-primary" id="btnBackfill" onclick="doBackfill()">补全</button>
-            </div>
-            <p class="hint">结束留空补到 lag 边界</p>
-            <div class="result" id="bfResult">等待操作...</div>
-          </div>
+          
+          
         </div>
 
         <div class="card">
           <div class="card-head"><h2>对比查询</h2></div>
           <div class="card-body">
             <div class="form-row">
-              <label>开始<input type="text" id="cmpStart" placeholder="可选" /></label>
-              <label>结束<input type="text" id="cmpEnd" placeholder="可选" /></label>
+              <label>开始<input type="text" id="cmpStart" placeholder="可选"></label>
+              <label>结束<input type="text" id="cmpEnd" placeholder="可选"></label>
               <button class="btn btn-secondary" id="btnCompare" onclick="doCompare()">对比</button>
             </div>
-            <p class="hint" id="cmpHint">开始、结束均不填时，默认查询上一个整点小时</p>
+            <div class="quick-range">
+              <span>快捷：</span>
+              <button type="button" class="btn btn-mini" data-k="today" onclick="setCmpQuick('today')">今天</button>
+              <button type="button" class="btn btn-mini" data-k="yesterday" onclick="setCmpQuick('yesterday')">昨天</button>
+              <button type="button" class="btn btn-mini" data-k="week" onclick="setCmpQuick('week')">本周</button>
+              <button type="button" class="btn btn-mini" data-k="lastweek" onclick="setCmpQuick('lastweek')">上周</button>
+              <button type="button" class="btn btn-mini" data-k="month" onclick="setCmpQuick('month')">本月</button>
+              <button type="button" class="btn btn-mini" data-k="lastmonth" onclick="setCmpQuick('lastmonth')">上月</button>
+            </div>
+            <p class="hint" id="cmpHint">开始、结束均不填时，默认查询上一个整点小时；本日截至上一整点，本周/本月截止前一天</p>
             <div class="compare-grid">
               <div><div class="num" id="cmpEs">-</div><div class="lbl">ES</div></div>
               <div><div class="num" id="cmpAdb">-</div><div class="lbl">ADB</div></div>
               <div><div class="num" id="cmpDiff">-</div><div class="lbl">差异</div></div>
             </div>
             <p class="info" id="cmpRange" style="font-size:.72rem;color:var(--muted);margin-top:8px"></p>
+            <div class="form-row" style="margin-top:8px">
+              <button type="button" class="btn btn-secondary" id="btnCmpBackfill" disabled onclick="cmpBackfill()">直接补全(整范围)</button>
+              <button type="button" class="btn btn-primary" id="btnCmpAnalyze" disabled onclick="cmpAnalyze()">分析异常(整范围)</button>
+              <span class="hint" style="margin-left:8px;flex:1">对比出异常后，选择直接补全整个范围，或分析异常按 日→时→5分→10秒 下钻定位</span>
+            </div>
           </div>
         </div>
 
@@ -649,21 +711,20 @@
           <div class="card-head"><h2>精准分析</h2><span class="tag" id="anStatus">空闲</span></div>
           <div class="card-body">
             <div class="form-row">
-              <label>开始<input type="text" id="anStart" placeholder="2026-08-27 00:00:00" /></label>
-              <label>结束<input type="text" id="anEnd" placeholder="默认 lag 边界" /></label>
-              <button class="btn btn-primary" id="btnAnalyze" onclick="doAnalyze()">分析</button>
+              <label>开始<input type="text" id="anStart" placeholder="默认昨天 00:00:00"></label>
+              <label>结束<input type="text" id="anEnd" placeholder="默认今天 00:00:00"></label>
+              <button class="btn btn-primary" id="btnAnalyze" onclick="doAnalyze()">开始分析</button>
             </div>
-            <p class="hint">三级下钻：小时 → 5分钟 → 10秒，逐窗口计数并流式填充状态</p>
-            <div class="result" id="anProg">等待分析...</div>
-            <div class="an-tabs">
-              <button class="an-tab" id="tabH" onclick="anTab('H')">小时</button>
-              <button class="an-tab" id="tabM" onclick="anTab('M')">分钟</button>
-              <button class="an-tab" id="tabS" onclick="anTab('S')">秒</button>
-              <button class="btn btn-primary" id="btnBackfillAn" style="margin-left:auto" onclick="backfillAnomalies()">补全异常窗口</button>
+            <div class="quick-range">
+              <span>快捷：</span>
+              <button type="button" class="btn btn-mini" data-k="today" onclick="setAnQuick('today')">今天</button>
+              <button type="button" class="btn btn-mini" data-k="yesterday" onclick="setAnQuick('yesterday')">昨天</button>
+              <button type="button" class="btn btn-mini" data-k="week" onclick="setAnQuick('week')">本周</button>
+              <button type="button" class="btn btn-mini" data-k="lastweek" onclick="setAnQuick('lastweek')">上周</button>
+              <button type="button" class="btn btn-mini" data-k="month" onclick="setAnQuick('month')">本月</button>
+              <button type="button" class="btn btn-mini" data-k="lastmonth" onclick="setAnQuick('lastmonth')">上月</button>
             </div>
-            <div class="an-pane active" id="paneH"></div>
-            <div class="an-pane" id="paneM"></div>
-            <div class="an-pane" id="paneS"></div>
+            <p class="hint">金字塔下钻：日 → 小时 → 5分钟 → 10秒，逐级剪枝，仅展示异常窗口</p>
           </div>
         </div>
 
@@ -763,6 +824,41 @@
               </div>
             </div>
           </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 精准分析弹框 -->
+  <div class="modal-mask" id="anModal" role="dialog" aria-modal="true">
+    <div class="modal an-modal">
+      <div class="modal-head">
+        <h3>精准分析详情 <span class="tag" id="anModalTag">空闲</span></h3>
+        <button type="button" class="modal-close" id="anModalClose" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body an-modal-body">
+        <div class="result" id="anProg">等待分析...</div>
+        <div class="an-bar" id="anBar"><div class="an-bar-fill" id="anBarFill"></div></div>
+        <div id="anSummary" class="an-summary"></div>
+        <div id="anDrill" class="an-drill" hidden>
+          <div class="an-row">
+            <div class="an-col">
+              <div class="an-col-title"><i>①</i>异常日</div>
+              <div class="an-col-body" id="anColBody1"></div>
+            </div>
+            <div class="an-col">
+              <div class="an-col-title"><i>②</i>异常小时</div>
+              <div class="an-col-body" id="anColBody2"></div>
+            </div>
+            <div class="an-col">
+              <div class="an-col-title"><i>③</i>异常5分钟</div>
+              <div class="an-col-body" id="anColBody3"></div>
+            </div>
+            <div class="an-col">
+              <div class="an-col-title"><i>④</i>异常10秒</div>
+              <div class="an-col-body" id="anColBody4"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1297,6 +1393,11 @@
         document.getElementById('cmpRange').textContent =
           `实际比对范围${defHint}：[${d.range.start} ~ ${d.range.end}) · ES ${d.es.field} · ADB ${d.mysql.field} · ${d.match ? '一致 ✓' : '不一致 ✗'}`;
         log('[对比] ES=' + d.es.count + ' ADB=' + d.mysql.count + ' diff=' + d.diff);
+        // 对比异常时允许用户处理整个范围（先查后补）
+        const abnormal = d.diff !== 0;
+        cmpCtx = abnormal ? { start: d.range.start, end: d.range.end } : null;
+        document.getElementById('btnCmpBackfill').disabled = !abnormal;
+        document.getElementById('btnCmpAnalyze').disabled = !abnormal;
       } catch (e) {
         if (!silent) alert('请求失败: ' + e.message);
         log('[对比] 请求失败', true);
@@ -1304,17 +1405,52 @@
         btn.disabled = false;
       }
     }
+    // 对比出异常后的处理：cmpCtx 保存整段范围
+    let cmpCtx = null;
+    // 直接补全：把整个范围抛给补全接口切窗连续补全
+    async function cmpBackfill() {
+      const r = cmpCtx;
+      if (!r) return;
+      if (!confirm('将按 ES 对整范围连续补全 [' + r.start + ' ~ ' + r.end + ')，继续？')) return;
+      const btn = document.getElementById('btnCmpBackfill');
+      const old = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '补全中...';
+      try {
+        const resp = await apiPost('/sync/backfill', { start: r.start, end: r.end });
+        if (resp.code !== 0) {
+          alert('补全失败: ' + resp.message); log('[补全] 失败: ' + resp.message, true);
+        } else {
+          const s = resp.data.summary;
+          document.getElementById('cmpRange').textContent =
+            '整范围补全完成 · 窗口 ' + s.totalWindows + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed;
+          log('[补全] 整范围完成 written=' + s.totalWritten + ' failed=' + s.failed);
+        }
+      } catch (e) { alert('补全请求失败: ' + (e.message || e)); log('[补全] 请求失败', true); }
+      finally { btn.disabled = false; btn.textContent = old; }
+    }
+    // 分析异常：把整个范围抛给分析接口做 日→时→5分→10秒 金字塔下钻
+    function cmpAnalyze() {
+      const r = cmpCtx;
+      if (!r) return;
+      document.getElementById('anStart').value = r.start;
+      document.getElementById('anEnd').value = r.end;
+      document.getElementById('anModal').classList.add('open');
+      if (anEs) { try { anEs.close(); } catch (_) {} anEs = null; }
+      runAnalyze(r.start, r.end);
+    }
 
-    /* ================= 精准分析（三级下钻，流式状态格） ================= */
+    /* ================= 精准分析（金字塔剪枝 · 日→时→5分→10秒） ================= */
     let anEs = null;
-    const anMs = { H: 3600000, M: 300000, S: 10000 }; // 小时 / 5分钟 / 10秒
-    const anLvlIdx = { H: 1, M: 2, S: 3 };
-    const anStage = {
-      1: '正在分析小时窗口...', 2: '正在对异常小时细化到5分钟...', 3: '正在对异常5分钟块细化到10秒...'
-    };
-    let anState = null; // {range, curLevel, abn:(level3 异常窗口收集), counts}
+    // 一次四级金字塔下钻；按层累计窗口数与异常数
+    // diffSum：逐层累计各层差异绝对值。金字塔各层会重复命中同源记录，
+    // 真正的待补条数应以最深层（10秒窗）的差异为准，而非各层求和。
+    let anState = { range: null, total: [0, 0, 0, 0], abn: [0, 0, 0, 0], diffSum: [0, 0, 0, 0], list: [] };
 
-    function anTag(v) { const el = document.getElementById('anStatus'); el.textContent = v; }
+    function anTag(v) {
+      document.getElementById('anStatus').textContent = v;
+      document.getElementById('anModalTag').textContent = v;
+    }
     function anProg(t, cls) {
       const el = document.getElementById('anProg');
       el.className = 'result' + (cls ? ' ' + cls : '');
@@ -1324,119 +1460,206 @@
       const s = String(r.start || ''), e = String(r.end || '');
       return s.slice(0, 19) + ' ~ ' + e.slice(11, 19);
     }
-    function anCellCls(r) {
-      if (r.diff === undefined) return 'pending';
-      if (r.diff === 0) return 'ok';
-      return 'bad';
-    }
-    function anKey(startMs) { return 'k' + startMs; }
-    // 在某个 pane 下按父窗口分组建立格子集，返回 (idx -> acell) 的映射
-    function anGroup(paneId, parent) {
-      const key = anKey(parent.startMs);
-      const state = anState;
-      const map = state.groups[paneId] = state.groups[paneId] || {};
-      if (state.groupsKey[paneId] && state.groupsKey[paneId][key]) return state.groupsKey[paneId][key];
-      const count = Math.max(1, Math.ceil((parent.endMs - parent.startMs) / anMs[paneId]));
-      const pane = document.getElementById('pane' + paneId);
-      const grp = document.createElement('div');
-      grp.className = 'an-grp';
-      const lbl = document.createElement('div');
-      lbl.className = 'an-grp-label';
-      lbl.textContent = (paneId === 'H' ? '小时 · ' : paneId === 'M' ? '5分钟 · ' : '10秒 · ')
-        + fmtAnRange(parent) + ' · ' + count + ' 格';
-      grp.appendChild(lbl);
-      const grid = document.createElement('div');
-      grid.className = 'an-grid';
-      const cells = [];
-      for (let i = 0; i < count; i++) {
-        const c = document.createElement('div');
-        c.className = 'acell';
-        cells.push(c);
-        grid.appendChild(c);
-      }
-      grp.appendChild(grid);
-      pane.appendChild(grp);
-      state.groupsKey[paneId] = state.groupsKey[paneId] || {};
-      state.groupsKey[paneId][key] = cells;
-      return cells;
-    }
-    function anFill(paneId, status) {
-      const map = anGroup(paneId, status.parent);
-      const idx = Math.floor((status.window.startMs - status.parent.startMs) / anMs[paneId]);
-      if (idx < 0 || idx >= map.length) return;
-      const c = map[idx];
-      c.className = 'acell ' + anCellCls(status);
-      c.title = fmtAnRange(status.window) + ' · ES ' + status.es + ' · ADB ' + status.adb;
-      if (status.level === 3 && !status.match && status.diff !== 0) {
-        anState.abn3 = anState.abn3 || [];
-        anState.abn3.push({ startMs: status.window.startMs, endMs: status.window.endMs });
-      }
-    }
     function anReset() {
-      anState = { range: null, curLevel: 0, abn3: [], groups: {}, groupsKey: {} };
-      ['H', 'M', 'S'].forEach(p => document.getElementById('pane' + p).innerHTML = '');
-      anTab('H');
+      anState = { range: null, total: [0, 0, 0, 0], abn: [0, 0, 0, 0], diffSum: [0, 0, 0, 0], list: [] };
+      anSel = { d: null, h: null, m: null };
+      document.getElementById('anBarFill').style.width = '0';
+      document.getElementById('anDrill').hidden = true;
+      ['anColBody1', 'anColBody2', 'anColBody3', 'anColBody4'].forEach(function (id) { document.getElementById(id).innerHTML = ''; });
+      document.getElementById('anSummary').innerHTML = '';
+      document.getElementById('anProg').className = 'result';
+      document.getElementById('anProg').textContent = '等待分析...';
     }
-    function anTab(p) {
-      ['H', 'M', 'S'].forEach(x => {
-        document.getElementById('tab' + x).classList.toggle('active', x === p);
-        document.getElementById('pane' + x).classList.toggle('active', x === p);
+    function anSetPct(pct) {
+      const el = document.getElementById('anBarFill');
+      if (el) el.style.width = Math.max(0, Math.min(100, Math.round(pct))) + '%';
+    }
+    const AN_PHASE = ['日窗口','小时窗口','5分钟窗口','10秒窗口'];
+    // 分析过程中仅接收每窗口的进度计数 progress（不含窗口明细），驱动进度条逐步推进；
+    // 全量异常窗口在 done 事件中一次性下发后再行分组渲染。
+    function anIngest(wins) {
+      anState.list = (wins || []).map(function (w) {
+        return { s: w.s, e: w.e, start: w.start, end: w.end, level: w.level, diff: w.diff };
       });
+      anState.diffSum = [0, 0, 0, 0];
+      anState.abn = [0, 0, 0, 0];
+      for (let i = 0; i < anState.list.length; i++) {
+        const li = anState.list[i].level - 1;
+        anState.abn[li]++;
+        anState.diffSum[li] += Math.abs(anState.list[i].diff);
+      }
     }
-    async function backfillAnomalies() {
-      const list = (anState && anState.abn3) || [];
-      if (list.length === 0) { alert('尚未定位到异常窗口（或无异常）'); return; }
-      anProg('正在回补 ' + list.length + ' 个异常窗口...');
-      log('[精准分析] 补全异常窗口 ' + list.length + ' 个');
+    // 补全单一异常窗口
+    async function anWinBackfill(w) {
+      anProg('正在补全窗口 ' + fmtAnRange(w) + ' ...');
       try {
-        const resp = await apiPost('/sync/backfill', { windows: list });
-        if (resp.code !== 0) { anProg('补全失败: ' + resp.message, 'fail'); log('[补全] 失败: ' + resp.message, true); return; }
-        const s = resp.data.summary;
-        anProg('补全完成 · hits ' + s.totalHits + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed, 'ok');
-        log('[补全] 完成 hits=' + s.totalHits + ' written=' + s.totalWritten + ' failed=' + s.failed);
-      } catch (e) { anProg('请求失败: ' + e.message, 'fail'); log('[补全] 请求失败', true); }
-    }
-    function doAnalyze() {
-      const start = document.getElementById('anStart').value.trim();
-      const end = document.getElementById('anEnd').value.trim();
-      if (!start) { alert('请填写开始时间'); return; }
-      if (anEs) { try { anEs.close(); } catch (_) {} }
-      anReset();
-      const btn = document.getElementById('btnAnalyze');
-      btn.disabled = true;
-      anTag('分析中');
-      anProg('已连接，正在按时段计算...');
-      log('[精准分析] 开始 ' + start + (end ? ' ~ ' + end : ''));
-      const qs = '?start=' + encodeURIComponent(start) + (end ? '&end=' + encodeURIComponent(end) : '');
-      anEs = new EventSource('/sync/compare/drilldown/sse' + qs);
-      anEs.addEventListener('range', e => {
-        anState.range = JSON.parse(e.data);
-        anState.curLevel = 1;
-        anProg(anStage[1]);
-      });
-      anEs.addEventListener('progress', e => {
-        const s = JSON.parse(e.data);
-        if (!anState.range) return;
-        if (s.level !== anState.curLevel) {
-          anState.curLevel = s.level;
-          anProg(anStage[s.level] || '');
+        const resp = await apiPost('/sync/backfill/windows', { windows: [{ startMs: w.s, endMs: w.e }] });
+        if (resp.code !== 0) { anProg('补全失败: ' + resp.message, 'fail'); log('[补全] 失败: ' + resp.message, true); }
+        else {
+          const s = resp.data.summary;
+          anProg('补全完成 · 窗口 ' + w.start + ' ~ ' + w.end + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed, 'ok');
+          log('[补全] 单窗完成 ' + w.start + ' → 写入=' + s.totalWritten + ' 失败=' + s.failed);
         }
-        anFill(s.level === 1 ? 'H' : (s.level === 2 ? 'M' : 'S'), s);
+      } catch (e) { anProg('补全请求失败: ' + (e.message || e), 'fail'); }
+    }
+    async function anOverallResync() {
+      const r = anState.range;
+      if (!r) return;
+      if (!confirm('该范围异常规模较大，将按 ES 全量覆盖重同步 [' + r.start + ' ~ ' + r.end + ')，继续？')) return;
+      anProg('正在整体重同步该范围...');
+      try {
+        const resp = await apiPost('/sync/backfill', { start: r.start, end: r.end });
+        if (resp.code !== 0) {
+          anProg('整体重同步失败: ' + resp.message, 'fail');
+        } else {
+          const s = resp.data.summary;
+          anProg('整体重同步完成 · 窗口 ' + s.totalWindows + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed, 'ok');
+          log('[整体重同步] 完成 written=' + s.totalWritten + ' failed=' + s.failed);
+        }
+      } catch (e) { anProg('整体重同步请求失败: ' + (e.message || e), 'fail'); }
+    }
+    function anRenderSummary() {
+      const tota = anState.total.reduce(function (a, b) { return a + b; }, 0);
+      const abna = anState.abn.reduce(function (a, b) { return a + b; }, 0);
+      // 金字塔各层会重复命中同源异常：真实的待补条数取有窗口的最深层差异，而非各层求和
+      let depth = -1;
+      for (let i = 0; i < anState.diffSum.length; i++) if (anState.total[i] > 0) depth = i;
+      const diff = depth >= 0 ? anState.diffSum[depth] : 0;
+      const btnHtml = abna > 0
+        ? '<button type="button" class="btn btn-secondary" id="anBtnResync">整体重同步该范围</button>'
+        : '';
+      document.getElementById('anSummary').innerHTML =
+        '<div class="an-summary-inner">' +
+          '金字塔下钻（日→时→5分→10秒）：共 ' + tota + ' 窗，异常 <b>' + abna + '</b> 窗，待补差异 <b>' + diff.toLocaleString() + '</b> 条。' +
+          btnHtml +
+        '</div>';
+      const btn = document.getElementById('anBtnResync');
+      if (btn) btn.addEventListener('click', anOverallResync);
+    }
+    // ======= 4 列联动下钻面板：日 → 小时 → 5分钟 → 10秒 =======
+    // 分析结束已持有全量异常窗口，点选仅在本地按时间包含关系过滤，无需再次请求后端。
+    let anSel = { d: null, h: null, m: null };
+    function anClearCol(id) {
+      document.getElementById(id).innerHTML = '<div class="an-empty">待选择</div>';
+    }
+    function anClearActive(colId) {
+      document.querySelectorAll('#' + colId + ' .an-cell.active').forEach(function (n) { n.classList.remove('active'); });
+    }
+    // 通用列渲染：mkLabel/mkSub 生成文案，onPick 处理点击下钻，mkBack 生成补全处理
+    function anRenderCol(colId, items, mkLabel, mkSub, onPick, mkBack) {
+      const el = document.getElementById(colId);
+      el.innerHTML = '';
+      if (!items || !items.length) { el.innerHTML = '<div class="an-empty">无异常窗口</div>'; return; }
+      items.forEach(function (it, i) {
+        const row = document.createElement('div');
+        row.className = 'an-cell';
+        let btns = '';
+        if (onPick) btns += '<span class="an-cell-btn">下钻 ›</span>';
+        if (mkBack) btns += '<button type="button" class="btn btn-mini an-cell-back">补全</button>';
+        row.innerHTML = '<span class="an-cell-t">' + mkLabel(it, i) + '</span>' +
+          '<span class="an-cell-n">' + mkSub(it, i) + '</span>' +
+          '<span class="an-cell-btns">' + btns + '</span>';
+        if (onPick) {
+          row.addEventListener('click', function () { onPick(it, row); });
+        }
+        if (mkBack) {
+          row.querySelector('.an-cell-back').addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            mkBack(it);
+          });
+        }
+        el.appendChild(row);
       });
-      anEs.addEventListener('level1', e => anProg(anStage[2]));
-      anEs.addEventListener('level2', e => anProg(anStage[3]));
-      anEs.addEventListener('level3', e => {
-        const lv = JSON.parse(e.data);
-        anProg('第3级完成 · 异常 ' + lv.abnormal + ' 个10秒窗');
+    }
+    function anRenderDrill() {
+      document.getElementById('anDrill').hidden = false;
+      anSel = { d: null, h: null, m: null };
+      const days = anState.list.filter(function (it) { return it.level === 1; }).sort(function (a, b) { return a.s - b.s; });
+      anRenderCol('anColBody1', days,
+        function (d) { return (d.start || '').slice(0, 10); },
+        function (d) { return '异常 ' + Math.abs(d.diff) + ' 条'; },
+        function (d, row) { anClearActive('anColBody1'); row.classList.add('active'); anSel.d = d; anSel.h = null; anSel.m = null; anRenderHours(); },
+        function (d) { anWinBackfill({ s: d.s, e: d.e, start: d.start, end: d.end }); }
+      );
+      if (days.length) {
+        const first = document.querySelector('#anColBody1 .an-cell');
+        if (first) first.click();
+      } else {
+        anClearCol('anColBody2'); anClearCol('anColBody3'); anClearCol('anColBody4');
+      }
+    }
+    function anRenderHours() {
+      const list = anState.list, d = anSel.d;
+      if (!d) return;
+      const hrs = list.filter(function (it) { return it.level === 2 && it.s >= d.s && it.e <= d.e; }).sort(function (a, b) { return a.s - b.s; });
+      anRenderCol('anColBody2', hrs,
+        function (h) { return (h.start || '').slice(0, 16); },
+        function (h) { return '异常 ' + Math.abs(h.diff) + ' 条'; },
+        function (h, row) { anClearActive('anColBody2'); row.classList.add('active'); anSel.h = h; anSel.m = null; anRenderMins(); },
+        function (h) { anWinBackfill({ s: h.s, e: h.e, start: h.start, end: h.end }); }
+      );
+      if (hrs.length) {
+        const f = document.querySelector('#anColBody2 .an-cell');
+        if (f) f.click();
+      } else { anClearCol('anColBody3'); anClearCol('anColBody4'); anSel.h = null; anSel.m = null; }
+    }
+    function anRenderMins() {
+      const list = anState.list, h = anSel.h;
+      if (!h) return;
+      const mins = list.filter(function (it) { return it.level === 3 && it.s >= h.s && it.e <= h.e; }).sort(function (a, b) { return a.s - b.s; });
+      anRenderCol('anColBody3', mins,
+        function (m) { return (m.start || '').slice(11, 16); },
+        function (m) { return '异常 ' + Math.abs(m.diff) + ' 条'; },
+        function (m, row) { anClearActive('anColBody3'); row.classList.add('active'); anSel.m = m; anRenderSecs(); },
+        function (m) { anWinBackfill({ s: m.s, e: m.e, start: m.start, end: m.end }); }
+      );
+      if (mins.length) {
+        const f = document.querySelector('#anColBody3 .an-cell');
+        if (f) f.click();
+      } else { anClearCol('anColBody4'); anSel.m = null; }
+    }
+    function anRenderSecs() {
+      const list = anState.list, m = anSel.m;
+      if (!m) { anClearCol('anColBody4'); return; }
+      const secs = list.filter(function (it) { return it.level === 4 && it.s >= m.s && it.e <= m.e; }).sort(function (a, b) { return a.s - b.s; });
+      anRenderCol('anColBody4', secs,
+        function (s) { return (s.start || '').slice(11, 19) + ' ~ ' + (s.end || '').slice(11, 19); },
+        function (s) { return '异常 ' + Math.abs(s.diff) + ' 条'; },
+        null,
+        function (s) { anWinBackfill({ s: s.s, e: s.e, start: s.start, end: s.end }); }
+      );
+    }
+    function runAnalyze(startStr, endStr) {
+      if (anEs) { try { anEs.close(); } catch (_) {} anEs = null; }
+      anReset();
+      document.getElementById('btnAnalyze').disabled = true;
+      anTag('分析中');
+      anProg('已连接，正在金字塔下钻（日 → 小时 → 5分钟 → 10秒）...');
+      log('[精准分析] 开始 ' + startStr + (endStr ? ' ~ ' + endStr : ''));
+      const qs = '?start=' + encodeURIComponent(startStr) + (endStr ? '&end=' + encodeURIComponent(endStr) : '');
+      anEs = new EventSource('/sync/compare/drilldown/sse' + qs);
+      anEs.addEventListener('range', e => { anState.range = JSON.parse(e.data); });
+      // 每处理完一个窗口即收到 progress：按「(第level-1级) + done/total」精确进位，4 段各占 25%
+      anEs.addEventListener('progress', e => {
+        const d = JSON.parse(e.data);
+        const lv = Math.max(1, Math.min(4, d.level || 1));
+        anState.total[lv - 1] = d.total || 0;
+        const frac = (lv - 1) + (d.total ? (d.done || 0) / d.total : 0);
+        anSetPct(frac / 4 * 100);
+        anProg('正在对比' + AN_PHASE[lv - 1] + '… ' + (d.done || 0) + ' / ' + (d.total || 0));
       });
       anEs.addEventListener('done', e => {
         const d = JSON.parse(e.data);
+        anSetPct(100);
+        anIngest(d.windows);
+        anRenderSummary();
+        anRenderDrill();
         anTag('完成');
-        anProg(d.abnormal === 0 ? '分析完成 · 未发现异常窗口 ✓' : '分析完成 · 共定位 ' + d.abnormal + ' 个异常窗口 ✓', 'ok');
+        anProg(d.abnormal === 0 ? '分析完成 · 未发现异常窗口 ✓' : '分析完成 · ① 选择异常日 → ② 异常时 → ③ 异常5分 → ④ 异常10秒', 'ok');
         log('[精准分析] 完成 异常10秒窗=' + d.abnormal);
         try { anEs.close(); } catch (_) {}
         anEs = null;
-        btn.disabled = false;
+        document.getElementById('btnAnalyze').disabled = false;
       });
       anEs.addEventListener('error', e => {
         let msg = '';
@@ -1446,17 +1669,79 @@
         log('[精准分析] 失败: ' + (msg || '未知错误'), true);
         try { anEs.close(); } catch (_) {}
         anEs = null;
-        btn.disabled = false;
+        document.getElementById('btnAnalyze').disabled = false;
       });
       anEs.onerror = function () {
-        if (!anEs) return; // done/error 已关闭，忽略正常结束
+        if (!anEs) return;
         try { anEs.close(); } catch (_) {}
         anEs = null;
-        btn.disabled = false;
+        document.getElementById('btnAnalyze').disabled = false;
         anTag('中断');
         anProg('分析流中断，已停止（可重试）', 'fail');
       };
     }
+    function doAnalyze() {
+      let start = document.getElementById('anStart').value.trim();
+      let end = document.getElementById('anEnd').value.trim();
+      if (!start) {
+        const now = new Date();
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const fmt = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+        start = fmt(yesterday) + ' 00:00:00';
+        if (!end) end = fmt(now) + ' 00:00:00';
+        document.getElementById('anStart').value = start;
+        document.getElementById('anEnd').value = end;
+      }
+      document.getElementById('anModal').classList.add('open');
+      if (anEs) { try { anEs.close(); } catch (_) {} anEs = null; }
+      runAnalyze(start, end || '');
+    }
+    function closeAnModal() {
+      if (anEs) { try { anEs.close(); } catch (_) {} anEs = null; }
+      document.getElementById('btnAnalyze').disabled = false;
+      document.getElementById('anModal').classList.remove('open');
+    }
+    // 快捷时间：计算 [start, end) 范围并填充到指定输入框。
+    // 统一规则：所有时间查询恒为 [整点startMs, 整点endMs)，即某字段 >= startMs 且 < endMs，
+    // 上下界均为整点（对齐到 0 毫秒的整点）毫秒时间戳。
+    //  - 本日结束 = 上一整点小时（当前 10:01 或 10:59 都截止到整点 10:00:00）
+    //  - 本周 / 本月截止前一天（含昨天全天）：结束为整点边界"今天 00:00:00"，
+    //    半开区间 [周一,今天00:00) / [1日,今天00:00) 即完整包含昨天
+    //  - 上周 / 上月保持各该周期的自然边界（含其最后一天）
+    function fillQuick(k, sid, eid) {
+      const PAD = n => String(n).padStart(2, '0');
+      const fmtD = d => d.getFullYear() + '-' + PAD(d.getMonth() + 1) + '-' + PAD(d.getDate()) + ' 00:00:00';
+      const fmtHH = d => fmtD(d).slice(0, 11) + PAD(d.getHours()) + ':00:00';
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const day = off => new Date(today.getFullYear(), today.getMonth(), today.getDate() + off);
+      const dow = (today.getDay() + 6) % 7; // 周一=0
+      const monday = day(-dow);
+      let start, end;
+      switch (k) {
+        case 'today': start = fmtD(day(0)); end = fmtHH(day(0)); break;
+        case 'yesterday': start = fmtD(day(-1)); end = fmtD(day(0)); break;
+        case 'week': start = fmtD(monday); end = fmtD(day(0)); break;
+        case 'lastweek': start = fmtD(day(-dow - 7)); end = fmtD(monday); break;
+        case 'month': start = fmtD(new Date(today.getFullYear(), today.getMonth(), 1)); end = fmtD(day(0)); break;
+        case 'lastmonth': start = fmtD(new Date(today.getFullYear(), today.getMonth() - 1, 1)); end = fmtD(new Date(today.getFullYear(), today.getMonth(), 0)); break;
+        default: return;
+      }
+      document.getElementById(sid).value = start;
+      document.getElementById(eid).value = end;
+      log('[精准分析] 快捷范围 ' + k + ' → ' + start + ' ~ ' + end);
+    }
+    function setAnQuick(k) { fillQuick(k, 'anStart', 'anEnd'); }
+    function setCmpQuick(k) { fillQuick(k, 'cmpStart', 'cmpEnd'); }
+    document.getElementById('anModalClose').addEventListener('click', closeAnModal);
+    document.getElementById('anModal').addEventListener('click', function (e) {
+      if (e.target.id !== 'anModal') return;
+      closeAnModal();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && document.getElementById('anModal').classList.contains('open')) closeAnModal();
+    });
 
     /* ================= 服务状态 runtime ================= */
     function fmtUptime(sec) {
@@ -1489,6 +1774,16 @@
 
     // 初始化绘制
     requestAnimationFrame(drawIncr);
+
+    // 精准分析预填默认时间（昨天 → 今天）
+    (function() {
+      const now = new Date();
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const fmt = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      document.getElementById('anStart').value = fmt(yesterday) + ' 00:00:00';
+      document.getElementById('anEnd').value = fmt(now) + ' 00:00:00';
+    })();
   </script>
-</body>
-</html>
+
+</body></html>

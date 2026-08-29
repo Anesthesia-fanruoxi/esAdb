@@ -10,7 +10,7 @@ es-adb
 .vscode/
 
 # 本地配置（含密钥，勿提交）
-config.yaml
+config/config.yaml
 config/config.yaml
 
 # 生成的 ConfigMap（含密钥）

@@ -11,8 +11,9 @@
 | GET | `/health` | 健康检查 |
 | GET | `/monitor/sse` | SSE 实时监控流（增量 / 补全侧栏 / 接线图） |
 | GET | `/monitor/backfill/sse` | 补全详情弹框 SSE（约 1Hz，含 QPS / 运行时序列） |
-| GET | `/sync/compare/drilldown/sse` | 三级下钻 SSE（小时→分钟→10秒窗），定位异常时间窗 |
-| POST / GET | `/sync/backfill` | 补全（历史回填）：连续范围 或 按窗口列表 |
+| GET | `/sync/compare/drilldown/sse` | 四级下钻 SSE（日→小时→5分钟→10秒窗），定位异常时间窗 |
+| POST / GET | `/sync/backfill` | 补全（历史回填）：**范围补全**，后端按 interval 切窗 |
+| POST | `/sync/backfill/windows` | 补全（历史回填）：**窗口补全**，按窗口列表直接回填（可多个、可不连续） |
 | POST / GET | `/sync/compare` | ES 与 ADB 条数对比 |
 
 ---
@@ -192,104 +193,92 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 
 ---
 
-## 4. GET /sync/compare/drilldown/sse 三级下钻（定位异常时间窗）
+## 4. GET /sync/compare/drilldown/sse 四级下钻（定位异常时间窗）
 
-对指定时间范围做 **小时 → 5分钟 → 10秒窗** 三级下钻，定位 ES 与 ADB 条数不一致的异常时间窗。每级只对上一级的**异常父窗口**继续细分，多个异常父窗口的细分窗口合并到同一并行池中并行。每个子窗口算完**立即**以 `progress` 事件流式返回（前端实时填充状态格），每级结束再发 `levelN` 汇总异常窗口。常用于对比后仅差 1~2 条时，精准定位误差时间点。5 分钟块 = 300s = 30 个 10 秒窗，最细仍为 10 秒。
+对指定时间范围做 **日 → 小时 → 5分钟 → 10秒窗** 四级金字塔下钻，定位 ES 与 ADB 条数不一致的异常时间窗。每级只对上一级的**异常父窗口**继续细分（正常窗口直接剪枝）；5 分钟块 = 300s = 30 个 10 秒窗，最细仍为 10 秒。
+
+**分析过程保持轻量**：每个窗口算完只推送一条进度计数 `progress {level,done,total}`（不含窗口明细），前端据此把进度条换算为 4 段各 25% 的精确进度，SSE 传输压力小；全部分析完成后由 `done` **一次性**下发全量异常窗口。
 
 **请求**（GET，query 参数）
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `start` | string | 是 | 范围开始（如 `2026-08-27 00:00:00`，也支持毫秒） |
+| `start` | string | 否 | 范围开始（如 `2026-08-01 00:00:00`，也支持毫秒）；缺省回退上一个整点小时 |
 | `end` | string | 否 | 范围结束（缺省按当前 lag 边界推） |
 | `workers` | int | 否 | 并行线程，默认 12，按窗口数自动收敛 |
-| `l1` / `l2` / `l3` | int | 否 | 各级粒度（秒），默认 `3600 / 300 / 10` |
+| `l1`/`l2`/`l3`/`l4` | int | 否 | 各级粒度（秒），默认 `86400 / 3600 / 300 / 10`；传 `0` 表示该层不下钻 |
 
-SSE 事件：`range` → 每窗口 `progress` → 每级完 `level1` / `level2` / `level3` → `done`（或 `error`）。
+SSE 事件：`range` → 每窗口 `progress` → `done`（或 `error`）。
 
 **range**
 
 ```json
-{ "startMs": 1756281600000, "endMs": 1756342400000, "start": "...", "end": "..." }
+{ "startMs": 1756281600000, "endMs": 1785369600000, "start": "...", "end": "..." }
 ```
 
-**progress**（每个窗口算完即推一次，前端据此定位各级状态格）
+**progress**（每个窗口算完即推一次，只带计数，用于驱动进度条）
+
+```json
+{ "level": 1, "done": 5, "total": 28 }
+```
+
+`level` 为当前级（1=日 / 2=小时 / 3=5分钟 / 4=10秒），`done/total` 为该级的处理进度。前端可换算总进度 `= ((level-1) + done/total) / 4 × 100%`。
+
+**done**（分析完成，一次性下发全量异常窗口，不区分层级）
 
 ```json
 {
-  "level": 1, "levelMs": 3600000,
-  "parent": { "startMs": 1756281600000, "endMs": 1756285200000, "start": "...", "end": "..." },
-  "window": { "startMs": 1756281600000, "endMs": 1756285200000, "start": "...", "end": "..." },
-  "es": 3600, "adb": 3599, "diff": 1, "match": false
-}
-```
-
-`level=1` 时 `parent` 为整体范围（小时格按 `window.startMs` 相对定位）；`level=2` 时 `parent` 为所在小时（5分钟块）；`level=3` 时 `parent` 为所在 5 分钟块（每块 30 个 10 秒格）。`diff=0` 为正常，`diff≠0` 为异常。
-
-**level1 / level2 / level3**（每级完毕的汇总）
-
-```json
-{
-  "level": 1, "levelMs": 3600000, "total": 24, "abnormal": 1,
+  "abnormal": 206,
   "windows": [
-    { "range": { "startMs": 1756281600000, "endMs": 1756285200000, "start": "...", "end": "..." },
-      "es": { "count": 3600 }, "mysql": { "count": 3599 }, "diff": 1, "match": false }
+    { "level": 1, "s": 1756281600000, "e": 1756368000000, "start": "2026-08-27 00:00:00", "end": "2026-08-28 00:00:00", "diff": 12 },
+    { "level": 4, "s": 1756281610000, "e": 1756281620000, "start": "2026-08-27 00:00:10", "end": "2026-08-27 00:00:20", "diff": 1 }
   ]
 }
 ```
 
-`windows` 仅包含该级异常窗口（`CompareResult`），按 start 升序；可用最末一级（level3）的 `range.startMs/endMs` 组装回补。
-
-**done**：`{ "abnormal": N }`，`N` 为最末一级（level3）的异常窗口数。
+- `abnormal`：最末一级（level4）的异常窗口数。
+- `windows`：全部各层级的异常窗口（`s/e` 为毫秒，`start/end` 为格式化字符串，`diff` 为 ES−ADB 差值，`level` 为该窗所属层级），按层排序。`diff=0` 为正常，`diff≠0` 为异常；异常窗口（`diff≠0`）才会上抛，正常窗口已剪枝。
 
 > 异常口径：窗口内 ES 命中数 ≠ ADB 已写入（`es_timestamp`）数量，不区分多少方向。
-
-**与补全衔接**：取 `progress(level=3)` 中 `match=false` 的窗口，或 `event.level3` 里 `windows[]` 的 `range.startMs/endMs`，组装成数组后 POST `/sync/backfill` 的 `windows` 字段即可只回补这些异常窗口（见第 5 章）。
+>
+> **与补全衔接**：将 `done.windows` 中同层/跨层的异常窗口 `s/e`（毫秒）组装成 `[{startMs:s, endMs:e}, ...]`，POST `/sync/backfill/windows` 即可只回填这些异常窗口（见第 5 章）。
 
 ---
 
-## 5. POST/GET /sync/backfill 补全同步
+## 5. 补全同步（回填历史数据，并行）
 
-按时间范围回填历史数据（并行）。支持两种入参（二选一）：
+4 级下钻定位出异常窗口后，回填缺失/不一致的历史数据。按入参形式分两个独立接口，职责分明、不混用参数：
 
-1. **连续范围**：`{ start, end }`（`end` 可缺省，内部按 `sync.interval` 切窗）
-2. **按窗口列表**（不连续，用于补全三级下钻定位的异常窗口）：`{ windows:[{startMs,endMs}] }`
+| 接口 | 方式 | 适用场景 |
+|---|---|---|
+| `POST / GET /sync/backfill` | **范围补全** | 连续范围，后端按 `sync.interval` 切窗后统一回填（整体重同步 / 补全天） |
+| `POST /sync/backfill/windows` | **窗口补全** | 按窗口列表直接回填，可多个、可不连续（补下钻定位的异常窗） |
 
-`body` 与 query 参数二选一。
+### 5.1 范围补全  POST/GET /sync/backfill
 
-**请求（按窗口列表补全）**
+入参 `{ start, end }`（`end` 可缺省），`body` 与 query 参数二选一。
+
+**请求**
 
 ```json
-{ "windows": [ { "startMs": 1756282000000, "endMs": 1756282010000 }, { "startMs": 1756282060000, "endMs": 1756282070000 } ] }
+{ "start": "2026-08-01 00:00:00", "end": "2026-08-29 00:00:00" }
 ```
 
-**请求（连续范围补全）**
+**参数**
 
-```json
-{ "start": "2026-08-27 00:00:00", "end": "2026-08-27 17:00:00" }
-```
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `start` | string | 是 | 起始时间，支持毫秒时间戳 或 `"2006-01-02 15:04:05"` 等 |
+| `end` | string | 否 | 结束时间；留空则截止到当前 lag 边界 |
 
-**连续范围模式参数**（此时请求体/query 含 `start`，不使用 `windows`）
-
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `start` | 是 | 起始时间，支持毫秒时间戳 或 `"2006-01-02 15:04:05"` 等 |
-| `end` | 否 | 结束时间；留空则截止到当前 lag 边界 |
-
-**窗口列表模式参数**（此时请求体含 `windows`，不使用 `start/end`）
-
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `windows` | 是 | 窗口数组 `[{startMs,endMs}]`，去重/排序后直接回补，单次 ≤ 4000 |
-
-**响应 data（连续范围模式含 `plan`；窗口列表模式无 `plan`，多返回 `windows` 数量）**
+**响应 data**（含 `plan` 切片明细 + `summary` 汇总）
 
 ```json
 {
   "plan": {
     "hasEnd": false, "intervalMs": 10000, "lagMs": 60000,
-    "rangeStart": { "ms": 0, "time": "2026-08-27 00:00:00.000" },
-    "rangeEnd":   { "ms": 0, "time": "2026-08-27 15:59:40.000" },
+    "rangeStart": { "ms": 0, "time": "2026-08-01 00:00:00.000" },
+    "rangeEnd":   { "ms": 0, "time": "2026-08-29 00:00:00.000" },
     "firstWindow": { "TimeRangeMs" },
     "lastWindow":  { "TimeRangeMs" },
     "windows": [ "TimeRangeMs..." ],
@@ -300,6 +289,31 @@ SSE 事件：`range` → 每窗口 `progress` → 每级完 `level1` / `level2` 
     "totalHits": 123456, "totalWritten": 123450, "failed": 0,
     "windows": [ { "window": {...}, "hits": 12, "written": 12, "error": "" } ]
   }
+}
+```
+
+### 5.2 窗口补全  POST /sync/backfill/windows
+
+入参 `{ windows:[{startMs,endMs}] }`，**直接**按给定窗口回填，不做切窗。仅支持 POST，不支持 query。
+
+**请求**
+
+```json
+{ "windows": [ { "startMs": 1782720000000, "endMs": 1782720030000 }, { "startMs": 1782723600000, "endMs": 1782723630000 } ] }
+```
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `windows` | array | 是 | 窗口数组 `[{startMs,endMs}]`，后端去重/校验后排序回填；单次 ≤ 4000，`endMs` 需大于 `startMs` |
+
+**响应 data**（无 `plan`，多返回实际补全窗口数 `windows`）
+
+```json
+{
+  "windows": 2,
+  "summary": { "totalWindows": 2, "workers": 2, "totalHits": 200, "totalWritten": 199, "failed": 0 }
 }
 ```
 
