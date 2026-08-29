@@ -447,18 +447,21 @@
     .compare-grid .lbl { font-size: .66rem; color: var(--faint); margin-top: 2px; }
 
     /* 精准分析 */
-    .an-windows { margin-top: 9px; display: flex; flex-direction: column; gap: 6px; }
-    .an-sec { font-size: .68rem; color: var(--faint); font-weight: 650; margin-top: 2px; }
-    .an-win {
-      display: flex; align-items: center; gap: 8px;
-      background: #f8fafb; border: 1px solid var(--border-soft);
-      border-radius: 8px; padding: 5px 9px; font-size: .74rem;
-    }
-    .an-win .t { flex: 1; min-width: 0; font-family: "SFMono-Regular", Consolas, monospace; color: var(--text);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .an-win .c { flex-shrink: 0; color: var(--muted); }
-    .an-win .c b { color: var(--red); }
-    .an-win button { flex-shrink: 0; padding: 3px 10px; font-size: .7rem; }
+    .an-tabs { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
+    .an-tab { padding: 4px 12px; font-size: .74rem; border-radius: 6px; cursor: pointer;
+      border: 1px solid var(--border-soft, #d7e0e5); background: #f4f7f9; color: var(--text, #1c2b33); }
+    .an-tab.active { background: var(--primary, #0f766e); color: #fff; border-color: transparent; }
+    .an-pane { display: none; margin-top: 8px; max-height: 220px; overflow: auto; padding-right: 4px; }
+    .an-pane.active { display: block; }
+    .an-grp { margin-bottom: 8px; }
+    .an-grp-label { font-size: .68rem; color: var(--muted, #6b7a82); margin-bottom: 4px; }
+    .an-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+    .acell { width: 20px; height: 20px; border-radius: 4px; background: #eef2f4;
+      border: 1px solid #d7e0e5; cursor: default; }
+    .acell.ok { background: #cfe8d6; border-color: #8fcaa4; }
+    .acell.bad { background: #f7cdd4; border-color: #ef9fab; }
+    .an-legend { display: flex; gap: 12px; margin-top: 6px; font-size: .66rem; color: var(--muted, #6b7a82); }
+    .an-legend .acell { width: 12px; height: 12px; display: inline-block; vertical-align: -2px; }
 
     /* 服务状态 */
     .rt-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; }
@@ -650,9 +653,17 @@
               <label>结束<input type="text" id="anEnd" placeholder="默认 lag 边界" /></label>
               <button class="btn btn-primary" id="btnAnalyze" onclick="doAnalyze()">分析</button>
             </div>
-            <p class="hint">三级下钻：逐级 小时→分钟→10秒，仅展开异常窗口</p>
+            <p class="hint">三级下钻：小时 → 5分钟 → 10秒，逐窗口计数并流式填充状态</p>
             <div class="result" id="anProg">等待分析...</div>
-            <div class="an-windows" id="anWindows"></div>
+            <div class="an-tabs">
+              <button class="an-tab" id="tabH" onclick="anTab('H')">小时</button>
+              <button class="an-tab" id="tabM" onclick="anTab('M')">分钟</button>
+              <button class="an-tab" id="tabS" onclick="anTab('S')">秒</button>
+              <button class="btn btn-primary" id="btnBackfillAn" style="margin-left:auto" onclick="backfillAnomalies()">补全异常窗口</button>
+            </div>
+            <div class="an-pane active" id="paneH"></div>
+            <div class="an-pane" id="paneM"></div>
+            <div class="an-pane" id="paneS"></div>
           </div>
         </div>
 
@@ -1294,9 +1305,15 @@
       }
     }
 
-    /* ================= 精准分析（三级下钻） ================= */
+    /* ================= 精准分析（三级下钻，流式状态格） ================= */
     let anEs = null;
-    const anLevel = { 1: ['1h', '异常小时', '正在按小时分析...'], 2: ['1m', '异常分钟', '正在对异常小时细化到分钟...'], 3: ['10s', '异常10秒窗', '正在对异常分钟细化到10秒窗...'] };
+    const anMs = { H: 3600000, M: 300000, S: 10000 }; // 小时 / 5分钟 / 10秒
+    const anLvlIdx = { H: 1, M: 2, S: 3 };
+    const anStage = {
+      1: '正在分析小时窗口...', 2: '正在对异常小时细化到5分钟...', 3: '正在对异常5分钟块细化到10秒...'
+    };
+    let anState = null; // {range, curLevel, abn:(level3 异常窗口收集), counts}
+
     function anTag(v) { const el = document.getElementById('anStatus'); el.textContent = v; }
     function anProg(t, cls) {
       const el = document.getElementById('anProg');
@@ -1304,44 +1321,79 @@
       el.textContent = t;
     }
     function fmtAnRange(r) {
-      const s = String(r.start || '').slice(0, 19), e = String(r.end || '').slice(11, 19);
-      return s + ' ~ ' + e;
+      const s = String(r.start || ''), e = String(r.end || '');
+      return s.slice(0, 19) + ' ~ ' + e.slice(11, 19);
     }
-    function renderAnLevel(lv) {
-      const box = document.getElementById('anWindows');
-      const sec = document.createElement('div');
-      sec.className = 'an-sec';
-      sec.textContent = `第${lv.level}级 · ${anLevel[lv.level][1]} · 检查 ${lv.total} 窗口 · 异常 ${lv.abnormal}`;
-      box.appendChild(sec);
-      (lv.windows || []).forEach(w => {
-        const row = document.createElement('div');
-        row.className = 'an-win';
-        const t = document.createElement('span'); t.className = 't';
-        t.textContent = fmtAnRange(w.range) + '  ' + lv.level + '-' + anLevel[lv.level][0];
-        row.appendChild(t);
-        const c = document.createElement('span'); c.className = 'c';
-        c.innerHTML = 'ES <b>' + (w.es && w.es.count) + '</b> · ADB ' + (w.mysql && w.mysql.count);
-        row.appendChild(c);
-        if (lv.level === 3) {
-          const b = document.createElement('button');
-          b.className = 'btn btn-primary';
-          b.textContent = '补全此窗口';
-          b.onclick = () => backfillWindow([{ startMs: w.range.startMs, endMs: w.range.endMs }]);
-          row.appendChild(b);
-        }
-        box.appendChild(row);
+    function anCellCls(r) {
+      if (r.diff === undefined) return 'pending';
+      if (r.diff === 0) return 'ok';
+      return 'bad';
+    }
+    function anKey(startMs) { return 'k' + startMs; }
+    // 在某个 pane 下按父窗口分组建立格子集，返回 (idx -> acell) 的映射
+    function anGroup(paneId, parent) {
+      const key = anKey(parent.startMs);
+      const state = anState;
+      const map = state.groups[paneId] = state.groups[paneId] || {};
+      if (state.groupsKey[paneId] && state.groupsKey[paneId][key]) return state.groupsKey[paneId][key];
+      const count = Math.max(1, Math.ceil((parent.endMs - parent.startMs) / anMs[paneId]));
+      const pane = document.getElementById('pane' + paneId);
+      const grp = document.createElement('div');
+      grp.className = 'an-grp';
+      const lbl = document.createElement('div');
+      lbl.className = 'an-grp-label';
+      lbl.textContent = (paneId === 'H' ? '小时 · ' : paneId === 'M' ? '5分钟 · ' : '10秒 · ')
+        + fmtAnRange(parent) + ' · ' + count + ' 格';
+      grp.appendChild(lbl);
+      const grid = document.createElement('div');
+      grid.className = 'an-grid';
+      const cells = [];
+      for (let i = 0; i < count; i++) {
+        const c = document.createElement('div');
+        c.className = 'acell';
+        cells.push(c);
+        grid.appendChild(c);
+      }
+      grp.appendChild(grid);
+      pane.appendChild(grp);
+      state.groupsKey[paneId] = state.groupsKey[paneId] || {};
+      state.groupsKey[paneId][key] = cells;
+      return cells;
+    }
+    function anFill(paneId, status) {
+      const map = anGroup(paneId, status.parent);
+      const idx = Math.floor((status.window.startMs - status.parent.startMs) / anMs[paneId]);
+      if (idx < 0 || idx >= map.length) return;
+      const c = map[idx];
+      c.className = 'acell ' + anCellCls(status);
+      c.title = fmtAnRange(status.window) + ' · ES ' + status.es + ' · ADB ' + status.adb;
+      if (status.level === 3 && !status.match && status.diff !== 0) {
+        anState.abn3 = anState.abn3 || [];
+        anState.abn3.push({ startMs: status.window.startMs, endMs: status.window.endMs });
+      }
+    }
+    function anReset() {
+      anState = { range: null, curLevel: 0, abn3: [], groups: {}, groupsKey: {} };
+      ['H', 'M', 'S'].forEach(p => document.getElementById('pane' + p).innerHTML = '');
+      anTab('H');
+    }
+    function anTab(p) {
+      ['H', 'M', 'S'].forEach(x => {
+        document.getElementById('tab' + x).classList.toggle('active', x === p);
+        document.getElementById('pane' + x).classList.toggle('active', x === p);
       });
-      anProg(anLevel[lv.level][2]);
     }
-    async function backfillWindow(windows) {
-      anProg('正在回补 ' + windows.length + ' 个异常窗口...');
-      log('[精准分析] 补全 ' + windows.length + ' 个异常窗口');
+    async function backfillAnomalies() {
+      const list = (anState && anState.abn3) || [];
+      if (list.length === 0) { alert('尚未定位到异常窗口（或无异常）'); return; }
+      anProg('正在回补 ' + list.length + ' 个异常窗口...');
+      log('[精准分析] 补全异常窗口 ' + list.length + ' 个');
       try {
-        const resp = await apiPost('/sync/backfill', { windows });
+        const resp = await apiPost('/sync/backfill', { windows: list });
         if (resp.code !== 0) { anProg('补全失败: ' + resp.message, 'fail'); log('[补全] 失败: ' + resp.message, true); return; }
         const s = resp.data.summary;
         anProg('补全完成 · hits ' + s.totalHits + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed, 'ok');
-        log('[补全] 完成 hits=' + s.totalHits + ' written=' + s.totalWritten);
+        log('[补全] 完成 hits=' + s.totalHits + ' written=' + s.totalWritten + ' failed=' + s.failed);
       } catch (e) { anProg('请求失败: ' + e.message, 'fail'); log('[补全] 请求失败', true); }
     }
     function doAnalyze() {
@@ -1349,23 +1401,39 @@
       const end = document.getElementById('anEnd').value.trim();
       if (!start) { alert('请填写开始时间'); return; }
       if (anEs) { try { anEs.close(); } catch (_) {} }
-      document.getElementById('anWindows').innerHTML = '';
+      anReset();
       const btn = document.getElementById('btnAnalyze');
       btn.disabled = true;
       anTag('分析中');
-      anProg('已连接，正在按时段计算...（逐级 小时→分钟→10秒）');
+      anProg('已连接，正在按时段计算...');
       log('[精准分析] 开始 ' + start + (end ? ' ~ ' + end : ''));
       const qs = '?start=' + encodeURIComponent(start) + (end ? '&end=' + encodeURIComponent(end) : '');
       anEs = new EventSource('/sync/compare/drilldown/sse' + qs);
-      anEs.addEventListener('range', () => anProg(anLevel[1][2]));
-      anEs.addEventListener('level1', e => renderAnLevel(JSON.parse(e.data)));
-      anEs.addEventListener('level2', e => renderAnLevel(JSON.parse(e.data)));
-      anEs.addEventListener('level3', e => renderAnLevel(JSON.parse(e.data)));
+      anEs.addEventListener('range', e => {
+        anState.range = JSON.parse(e.data);
+        anState.curLevel = 1;
+        anProg(anStage[1]);
+      });
+      anEs.addEventListener('progress', e => {
+        const s = JSON.parse(e.data);
+        if (!anState.range) return;
+        if (s.level !== anState.curLevel) {
+          anState.curLevel = s.level;
+          anProg(anStage[s.level] || '');
+        }
+        anFill(s.level === 1 ? 'H' : (s.level === 2 ? 'M' : 'S'), s);
+      });
+      anEs.addEventListener('level1', e => anProg(anStage[2]));
+      anEs.addEventListener('level2', e => anProg(anStage[3]));
+      anEs.addEventListener('level3', e => {
+        const lv = JSON.parse(e.data);
+        anProg('第3级完成 · 异常 ' + lv.abnormal + ' 个10秒窗');
+      });
       anEs.addEventListener('done', e => {
         const d = JSON.parse(e.data);
         anTag('完成');
-        anProg(d.abnormal === 0 ? '分析完成 · 未发现异常窗口 ✓' : '分析完成 · 共定位 ' + d.abnormal + ' 个异常窗口', 'ok');
-        log('[精准分析] 完成 异常窗口=' + d.abnormal);
+        anProg(d.abnormal === 0 ? '分析完成 · 未发现异常窗口 ✓' : '分析完成 · 共定位 ' + d.abnormal + ' 个异常窗口 ✓', 'ok');
+        log('[精准分析] 完成 异常10秒窗=' + d.abnormal);
         try { anEs.close(); } catch (_) {}
         anEs = null;
         btn.disabled = false;

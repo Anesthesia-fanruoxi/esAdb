@@ -205,7 +205,8 @@ func (a *SyncAPI) HandleCompare(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleCompareDrilldownSSE GET /sync/compare/drilldown/sse
-// 三级下钻找出异常时间窗（默认 小时 → 分钟 → 10 秒），逐级以 SSE 流式返回
+// 三级下钻找出异常时间窗（默认 小时 → 5分钟 → 10 秒），
+// 每窗口算完以 progress 事件流式返回；每级结束再发 levelN 汇总；最后 done
 // query: start, end, workers(默认12), 可选 l1/l2/l3 为秒，覆盖各级粒度
 func (a *SyncAPI) HandleCompareDrilldownSSE(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -231,10 +232,15 @@ func (a *SyncAPI) HandleCompareDrilldownSSE(w http.ResponseWriter, r *http.Reque
 		return def
 	}
 	workers := parseIntQ("workers", 12)
+	// 各级粒度（秒），默认 小时 / 5分钟 / 10秒
 	levelSecs := []int64{
 		int64(parseIntQ("l1", 3600)),
-		int64(parseIntQ("l2", 60)),
+		int64(parseIntQ("l2", 300)),
 		int64(parseIntQ("l3", 10)),
+	}
+	levelMs := make([]int64, len(levelSecs))
+	for i, s := range levelSecs {
+		levelMs[i] = s * 1000
 	}
 
 	startMs, err := parseOptionalMs(r.URL.Query().Get("start"))
@@ -277,7 +283,9 @@ func (a *SyncAPI) HandleCompareDrilldownSSE(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	levels, err := a.mgr.DrilldownLevels(r.Context(), win, levelSecs, workers)
+	levels, err := a.mgr.DrilldownLevels(r.Context(), win, levelMs, workers, func(_ int, s store.DrillStatus) {
+		send("progress", s)
+	})
 	if err != nil {
 		send("error", map[string]string{"message": err.Error()})
 		return

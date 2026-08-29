@@ -194,7 +194,7 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 
 ## 4. GET /sync/compare/drilldown/sse 三级下钻（定位异常时间窗）
 
-对指定时间范围做 **小时 → 分钟 → 10秒窗** 三级下钻，定位 ES 与 ADB 条数不一致的异常时间窗。每级只对上一级的**异常父窗口**继续细分（避免全量下钻），多个异常父窗口的细分窗口合并到同一并行池中并行。常用于对比后仅差 1~2 条时，精准锁定误差时间点。
+对指定时间范围做 **小时 → 5分钟 → 10秒窗** 三级下钻，定位 ES 与 ADB 条数不一致的异常时间窗。每级只对上一级的**异常父窗口**继续细分，多个异常父窗口的细分窗口合并到同一并行池中并行。每个子窗口算完**立即**以 `progress` 事件流式返回（前端实时填充状态格），每级结束再发 `levelN` 汇总异常窗口。常用于对比后仅差 1~2 条时，精准定位误差时间点。5 分钟块 = 300s = 30 个 10 秒窗，最细仍为 10 秒。
 
 **请求**（GET，query 参数）
 
@@ -203,17 +203,32 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 | `start` | string | 是 | 范围开始（如 `2026-08-27 00:00:00`，也支持毫秒） |
 | `end` | string | 否 | 范围结束（缺省按当前 lag 边界推） |
 | `workers` | int | 否 | 并行线程，默认 12，按窗口数自动收敛 |
-| `l1` / `l2` / `l3` | int | 否 | 各级粒度（秒），默认 `3600 / 60 / 10` |
+| `l1` / `l2` / `l3` | int | 否 | 各级粒度（秒），默认 `3600 / 300 / 10` |
 
-SSE 事件：`range` → 逐级 `level1` / `level2` / `level3` → `done`（或 `error`）。
+SSE 事件：`range` → 每窗口 `progress` → 每级完 `level1` / `level2` / `level3` → `done`（或 `error`）。
 
-**range / level1**
+**range**
 
 ```json
-event: range
 { "startMs": 1756281600000, "endMs": 1756342400000, "start": "...", "end": "..." }
+```
 
-event: level1
+**progress**（每个窗口算完即推一次，前端据此定位各级状态格）
+
+```json
+{
+  "level": 1, "levelMs": 3600000,
+  "parent": { "startMs": 1756281600000, "endMs": 1756285200000, "start": "...", "end": "..." },
+  "window": { "startMs": 1756281600000, "endMs": 1756285200000, "start": "...", "end": "..." },
+  "es": 3600, "adb": 3599, "diff": 1, "match": false
+}
+```
+
+`level=1` 时 `parent` 为整体范围（小时格按 `window.startMs` 相对定位）；`level=2` 时 `parent` 为所在小时（5分钟块）；`level=3` 时 `parent` 为所在 5 分钟块（每块 30 个 10 秒格）。`diff=0` 为正常，`diff≠0` 为异常。
+
+**level1 / level2 / level3**（每级完毕的汇总）
+
+```json
 {
   "level": 1, "levelMs": 3600000, "total": 24, "abnormal": 1,
   "windows": [
@@ -223,13 +238,13 @@ event: level1
 }
 ```
 
-`level2` / `level3` 结构相同，`windows` 为该级定位到的异常窗口（`CompareResult`）；`total` 为该级实际检查窗口数，`abnormal` 为计数不符数。
+`windows` 仅包含该级异常窗口（`CompareResult`），按 start 升序；可用最末一级（level3）的 `range.startMs/endMs` 组装回补。
 
 **done**：`{ "abnormal": N }`，`N` 为最末一级（level3）的异常窗口数。
 
-> 异常口径：窗口内 ES 命中数 ≠ ADB 已写入（`es_timestamp`）数量即视为异常，不区分多少方向。
+> 异常口径：窗口内 ES 命中数 ≠ ADB 已写入（`es_timestamp`）数量，不区分多少方向。
 
-**与补全衔接（补全按钮）**：取最末切粒度的 `event.level3` 里 `windows[]` 的 `range.startMs/endMs`，组装成数组后 POST `/sync/backfill` 的 `windows` 字段即可只回补这些异常窗口（见第 5 章）。
+**与补全衔接**：取 `progress(level=3)` 中 `match=false` 的窗口，或 `event.level3` 里 `windows[]` 的 `range.startMs/endMs`，组装成数组后 POST `/sync/backfill` 的 `windows` 字段即可只回补这些异常窗口（见第 5 章）。
 
 ---
 
