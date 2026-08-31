@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	monitorRetention = time.Hour
-	sessionQpsMax    = 600 // 本次补全 QPS 序列上限
+	monitorRetention    = time.Hour
+	sessionQpsMax       = 600  // 本次补全 QPS 序列上限
+	backfillWindowsMax  = 2000 // 补全单窗口采样点上限（防整月数十万窗口无限累积内存）
+	backfillPointsMax   = 4000 // 补全进度快照上限
 )
 
 // IncrementalPoint 单次增量同步记录
@@ -511,6 +513,9 @@ func (mon *Monitor) BeginBackfill(rangeStart, rangeEnd string, totalWindows int,
 		mon.sessionLastWin = lastWin
 		mon.currentBackfill = &pt
 		mon.backfillProgress = append(mon.backfillProgress, pt)
+		if n := len(mon.backfillProgress); n > backfillPointsMax {
+			mon.backfillProgress = mon.backfillProgress[n-backfillPointsMax:]
+		}
 		mon.mu.Unlock()
 		mon.broadcast(SSEMessage{Event: "backfill", Data: pt})
 		mon.broadcast(SSEMessage{Event: "pipeline", Data: mon.Pipeline()})
@@ -537,6 +542,9 @@ func (mon *Monitor) RecordBackfillWindow(res WindowSyncResult) {
 		}
 		mon.mu.Lock()
 		mon.backfillWindows = append(mon.backfillWindows, pt)
+		if n := len(mon.backfillWindows); n > backfillWindowsMax {
+			mon.backfillWindows = mon.backfillWindows[n-backfillWindowsMax:]
+		}
 		mon.mu.Unlock()
 		mon.prune(now)
 		mon.broadcast(SSEMessage{Event: "backfill_window", Data: pt})
@@ -577,6 +585,9 @@ func (mon *Monitor) UpdateBackfillProgress(completed, failed, totalHits, totalWr
 		}
 		mon.currentBackfill = &pt
 		mon.backfillProgress = append(mon.backfillProgress, pt)
+		if n := len(mon.backfillProgress); n > backfillPointsMax {
+			mon.backfillProgress = mon.backfillProgress[n-backfillPointsMax:]
+		}
 		mon.mu.Unlock()
 
 		mon.prune(now)

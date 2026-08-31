@@ -17,8 +17,10 @@ import (
 
 // SyncAPI 同步相关接口
 type SyncAPI struct {
-	cfg *config.Config
-	mgr *store.Manager
+	cfg     *config.Config
+	mgr     *store.Manager
+	bfMu    sync.Mutex // 补全任务互斥：同一时刻仅允许一个补全任务
+	drillMu sync.Mutex // 异常分析互斥：同一时刻仅允许一个下钻分析任务
 }
 
 func NewSyncAPI(cfg *config.Config, mgr *store.Manager) *SyncAPI {
@@ -88,6 +90,13 @@ func (a *SyncAPI) HandleBackfill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !a.bfMu.TryLock() {
+		common.Warn("[backfill] 存在进行中的补全任务，本次范围补全被拒绝")
+		common.WriteFail(w, http.StatusConflict, 20, "已有补全任务在执行，请等待其完成后再试")
+		return
+	}
+	defer a.bfMu.Unlock()
+
 	common.Info("[backfill] 开始范围补全 totalWindows=%d range=[%s, %s)",
 		plan.TotalWindows, plan.RangeStart.Time, plan.RangeEnd.Time)
 
@@ -147,6 +156,14 @@ func (a *SyncAPI) HandleBackfillWindows(w http.ResponseWriter, r *http.Request) 
 
 	rangeStart := common.FormatMs(windows[0].StartMs)
 	rangeEnd := common.FormatMs(windows[len(windows)-1].EndMs)
+
+	if !a.bfMu.TryLock() {
+		common.Warn("[backfill] 存在进行中的补全任务，本次窗口补全被拒绝")
+		common.WriteFail(w, http.StatusConflict, 20, "已有补全任务在执行，请等待其完成后再试")
+		return
+	}
+	defer a.bfMu.Unlock()
+
 	common.Info("[backfill] 按窗口补全 n=%d range=[%s, %s)", len(windows), rangeStart, rangeEnd)
 
 	summary := a.mgr.BackfillWindows(windows, rangeStart, rangeEnd)
@@ -302,6 +319,13 @@ func (a *SyncAPI) HandleCompareDrilldownSSE(w http.ResponseWriter, r *http.Reque
 		common.WriteFail(w, http.StatusBadRequest, 3, err.Error())
 		return
 	}
+
+	if !a.drillMu.TryLock() {
+		common.Warn("[drilldown] 存在进行中的异常分析任务，本次下钻被拒绝")
+		common.WriteFail(w, http.StatusConflict, 21, "已有异常分析任务在执行，请等待其完成后再试")
+		return
+	}
+	defer a.drillMu.Unlock()
 
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

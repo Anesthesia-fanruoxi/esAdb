@@ -215,9 +215,9 @@ func (s *MySQLStore) CountByEsTimestamp(startMs, endMs int64) (int, error) {
 	return cnt, err
 }
 
-// BuildFromESRecords 解析 ES 记录为模型（带 es_timestamp 毫秒）
+// BuildFromESRecords 解析 ES 记录为模型（带 es_timestamp 毫秒）；同 id 保留最后一条
 func BuildFromESRecords(records []ESRecord) []*model.EventLog {
-	var logs []*model.EventLog
+	byID := make(map[string]*model.EventLog, len(records))
 	for _, r := range records {
 		m := common.ConvertMap(r.Content)
 		if m["id"] == "" {
@@ -229,6 +229,10 @@ func BuildFromESRecords(records []ESRecord) []*model.EventLog {
 			continue
 		}
 		el.EsTimestamp = r.EsTimestamp
+		byID[el.ID] = el
+	}
+	logs := make([]*model.EventLog, 0, len(byID))
+	for _, el := range byID {
 		logs = append(logs, el)
 	}
 	return logs

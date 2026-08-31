@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -55,6 +56,9 @@ func (m *Manager) SyncWindow(win common.TimeRangeMs) (hits, written int, err err
 	}
 
 	logs := BuildFromESRecords(records)
+	if dup := hits - len(logs); dup > 0 {
+		common.Debug("窗口 [%s, %s) 重复 id 跳过 %d 条", win.Start, win.End, dup)
+	}
 	written, _, err = m.MySQL.BatchInsertIgnore(logs)
 	if err != nil {
 		return hits, 0, err
@@ -136,21 +140,25 @@ func (m *Manager) BackfillWindows(windows []common.TimeRangeMs, rangeStart, rang
 	pause := time.Duration(m.cfg.Sync.BackfillPauseMs) * time.Millisecond
 	common.Info("[backfill] workers=%d pause=%v totalWindows=%d", workers, pause, len(windows))
 
-	ch := make(chan common.TimeRangeMs, len(windows))
-	for _, w := range windows {
-		ch <- w
-	}
-	close(ch)
+	// 流式供给：小缓冲 + 生产者逐批发，避免一次性把全部窗口驻留内存（整月可到数十万窗口）
+	const chanCap = 64
+	ch := make(chan common.TimeRangeMs, chanCap)
+	go func() {
+		defer close(ch)
+		for _, w := range windows {
+			ch <- w
+		}
+	}()
 
 	var (
-		results       []WindowSyncResult
-		mu            sync.Mutex
-		wg            sync.WaitGroup
-		completed     int
-		failed        int
-		totalHits     int
-		totalWritten  int
-		progressCount int
+		mu                      sync.Mutex
+		wg                      sync.WaitGroup
+		completed               int
+		failed                  int
+		totalHits               int
+		totalWritten            int
+		progressCount           int
+		failedWindows           []WindowSyncResult // 仅保留失败窗口明细，正常运行不驻留全量结果
 	)
 
 	for i := 0; i < workers; i++ {
@@ -167,9 +175,9 @@ func (m *Manager) BackfillWindows(windows []common.TimeRangeMs, rangeStart, rang
 				}
 
 				mu.Lock()
-				results = append(results, res)
 				if res.Error != "" {
 					failed++
+					failedWindows = append(failedWindows, res)
 				} else {
 					completed++
 				}
@@ -202,29 +210,14 @@ func (m *Manager) BackfillWindows(windows []common.TimeRangeMs, rangeStart, rang
 		m.Monitor.UpdateBackfillProgress(completed, failed, totalHits, totalWritten, len(windows), rangeStart, rangeEnd)
 	}
 
-	summary.Windows = sortResultsByWindow(results, windows)
-	for _, r := range summary.Windows {
-		summary.TotalHits += r.Hits
-		summary.TotalWritten += r.Written
-		if r.Error != "" {
-			summary.Failed++
-		}
-	}
+	sort.Slice(failedWindows, func(i, j int) bool {
+		return failedWindows[i].Window.StartMs < failedWindows[j].Window.StartMs
+	})
+	summary.Failed = failed
+	summary.TotalHits = totalHits
+	summary.TotalWritten = totalWritten
+	summary.Windows = failedWindows
 	return summary
-}
-
-func sortResultsByWindow(results []WindowSyncResult, order []common.TimeRangeMs) []WindowSyncResult {
-	byStart := make(map[int64]WindowSyncResult, len(results))
-	for _, r := range results {
-		byStart[r.Window.StartMs] = r
-	}
-	out := make([]WindowSyncResult, 0, len(order))
-	for _, w := range order {
-		if r, ok := byStart[w.StartMs]; ok {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 // CompareRange 对比 ES 与 ADB 在指定时间范围内的条数
