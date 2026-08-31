@@ -120,6 +120,16 @@ func parseHitsTotal(raw json.RawMessage) int {
 
 // SearchByRangeMs 按毫秒时间戳查询 [startMs, endMs)
 func (s *ESStore) SearchByRangeMs(startMs, endMs int64, size int, logQuery bool) ([]ESRecord, error) {
+	records, _, err := s.SearchByRangeMsRaw(startMs, endMs, size, logQuery)
+	return records, err
+}
+
+// SearchByRangeMsRaw 按毫秒时间戳查询，返回过滤后记录与原始命中数。
+// 原始命中数用于判断本窗口是否达到 size 上限（可能截断），自适应补全据此切小窗口。
+func (s *ESStore) SearchByRangeMsRaw(startMs, endMs int64, size int, logQuery bool) ([]ESRecord, int, error) {
+	if size <= 0 {
+		size = 1000
+	}
 	return s.SearchByRange(time.UnixMilli(startMs), time.UnixMilli(endMs), size, logQuery)
 }
 
@@ -136,10 +146,11 @@ func (s *ESStore) queryStringClause() map[string]interface{} {
 	}
 }
 
-// SearchByRange 查询 [start, end) 内 method 匹配的文档；logQuery 控制是否打印查询日志
-func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) ([]ESRecord, error) {
+// SearchByRange 查询 [start, end) 内 method 匹配的文档；logQuery 控制是否打印查询日志。
+// 返回过滤后的记录与 ES 实际返回的命中条数（受 size 截断，用于判断窗口是否可能溢出）。
+func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) ([]ESRecord, int, error) {
 	if strings.TrimSpace(s.cfg.URL) == "" {
-		return nil, fmt.Errorf("ES 未配置")
+		return nil, 0, fmt.Errorf("ES 未配置")
 	}
 	if size <= 0 {
 		size = 1000
@@ -169,24 +180,25 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 
 	body, err := json.Marshal(query)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	raw, err := s.doSearch(body, 60*time.Second)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var esResp esSearchResp
 	if err := json.Unmarshal(raw, &esResp); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
+	hitCount := len(esResp.Hits.Hits)
 	out := s.recordsFromHits(esResp.Hits.Hits)
 	if logQuery {
-		common.Debug("ES 区间查询 [%s, %s) hits=%d",
-			start.Format("15:04:05"), end.Format("15:04:05"), len(out))
+		common.Debug("ES 区间查询 [%s, %s) hits=%d(截断阈值 %d)",
+			start.Format("15:04:05"), end.Format("15:04:05"), hitCount, size)
 	}
-	return out, nil
+	return out, hitCount, nil
 }
 
 // CountByRangeMs 统计 [startMs, endMs) 文档数（与 SearchByRange 同一 ES 条件，不含客户端 content 过滤）

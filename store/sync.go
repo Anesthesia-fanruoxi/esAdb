@@ -29,6 +29,30 @@ type BackfillSummary struct {
 	Windows      []WindowSyncResult `json:"windows"`
 }
 
+// 自适应补全窗口
+const (
+	// SplitThreshold 单窗口命中数达到该值视为可能截断，触发向更小窗口逐级分裂
+	SplitThreshold = 10000
+	// BackfillBaseIntervalSec 补全初始（最大）窗口粒度：10 分钟
+	BackfillBaseIntervalSec = 600
+)
+
+// backfillLadderMin 自适应窗口逐级分裂梯级（分钟）：10 → 5 → 2 → 1
+var backfillLadderMin = []int64{10, 5, 2, 1}
+
+// nextGranularityMs 返回当前窗口时长的下一级更小粒度（毫秒）；已达最小粒度返回 0 表示不可再分
+func nextGranularityMs(winMs int64) int64 {
+	for i, g := range backfillLadderMin {
+		if winMs >= g*60*1000 {
+			if i >= len(backfillLadderMin)-1 {
+				return 0
+			}
+			return backfillLadderMin[i+1] * 60 * 1000
+		}
+	}
+	return 0
+}
+
 // SyncWindow 单窗口：查 ES → 写 ADB
 func (m *Manager) SyncWindow(win common.TimeRangeMs) (hits, written int, err error) {
 	if m == nil {
@@ -65,6 +89,53 @@ func (m *Manager) SyncWindow(win common.TimeRangeMs) (hits, written int, err err
 		return hits, 0, err
 	}
 
+	common.Debug("窗口 [%s, %s) ES=%d 写入=%d", win.Start, win.End, hits, written)
+	return hits, written, nil
+}
+
+// SyncWindowAdaptive 自适应单窗口同步：命中数达到阈值则沿 10→5→2→1 分钟逐级分裂。
+// 稀疏窗口一次拉取（快），密集窗口自动切小粒度（稳），避免单次查询过大/截断。
+func (m *Manager) SyncWindowAdaptive(win common.TimeRangeMs) (hits, written int, err error) {
+	size := SplitThreshold
+	records, rawHits, err := m.ES.SearchByRangeMsRaw(win.StartMs, win.EndMs, size, true)
+	if err != nil {
+		return 0, 0, err
+	}
+	// 未达阈值：整个窗口一次处理
+	if rawHits < size {
+		return m.applyWindowRecords(win, records)
+	}
+	// 可再切分：沿梯级分裂为更小窗口，逐级递归
+	if subWinMs := nextGranularityMs(win.EndMs - win.StartMs); subWinMs > 0 {
+		subWins := common.SplitWindowsMs(win.StartMs, win.EndMs, subWinMs)
+		common.Info("窗口 [%s, %s) 命中数=%d 达上限，切分为 %d 个 %d 分钟窗口",
+			win.Start, win.End, rawHits, len(subWins), subWinMs/60000)
+		var totalHits, totalWritten int
+		for _, sw := range subWins {
+			h, w, e := m.SyncWindowAdaptive(sw)
+			if e != nil {
+				return totalHits, totalWritten, e
+			}
+			totalHits += h
+			totalWritten += w
+		}
+		return totalHits, totalWritten, nil
+	}
+	// 已达最小粒度 1 分钟仍超上限：直接补前 size 条，超出部分忽略（差异由外部对比分析兜底）
+	return m.applyWindowRecords(win, records)
+}
+
+// applyWindowRecords 将查询到的 ES 记录写入 ADB，返回命中数与写入数
+func (m *Manager) applyWindowRecords(win common.TimeRangeMs, records []ESRecord) (hits, written int, err error) {
+	hits = len(records)
+	logs := BuildFromESRecords(records)
+	if dup := hits - len(logs); dup > 0 {
+		common.Debug("窗口 [%s, %s) 重复 id 跳过 %d 条", win.Start, win.End, dup)
+	}
+	written, _, err = m.MySQL.BatchInsertIgnore(logs)
+	if err != nil {
+		return hits, 0, err
+	}
 	common.Debug("窗口 [%s, %s) ES=%d 写入=%d", win.Start, win.End, hits, written)
 	return hits, written, nil
 }
@@ -110,8 +181,22 @@ func (m *Manager) SyncWindowWithRetryResult(win common.TimeRangeMs) (hits, writt
 	return hits, written, lastErr
 }
 
-// BackfillWindows 并行补全多个窗口
+// BackfillWindows 窗口补全（/sync/backfill/windows）：固定窗口粒度，逐窗 SyncWindow。
 func (m *Manager) BackfillWindows(windows []common.TimeRangeMs, rangeStart, rangeEnd string) *BackfillSummary {
+	return m.runBackfill(windows, rangeStart, rangeEnd, m.SyncWindow)
+}
+
+// BackfillWindowsAdaptive 范围补全（/sync/backfill）：以 10 分钟初始窗口并行，
+// 逐窗 SyncWindowAdaptive，命中达阈值自动分裂。独立路径，不影响窗口补全。
+func (m *Manager) BackfillWindowsAdaptive(windows []common.TimeRangeMs, rangeStart, rangeEnd string) *BackfillSummary {
+	return m.runBackfill(windows, rangeStart, rangeEnd, m.SyncWindowAdaptive)
+}
+
+// syncWindowFunc 单窗口处理函数：查 ES → 写 ADB
+type syncWindowFunc func(win common.TimeRangeMs) (hits, written int, err error)
+
+// runBackfill 并行补全公共执行体
+func (m *Manager) runBackfill(windows []common.TimeRangeMs, rangeStart, rangeEnd string, run syncWindowFunc) *BackfillSummary {
 	summary := &BackfillSummary{TotalWindows: len(windows)}
 	if len(windows) == 0 {
 		return summary
@@ -163,7 +248,7 @@ func (m *Manager) BackfillWindows(windows []common.TimeRangeMs, rangeStart, rang
 			for win := range ch {
 				res := WindowSyncResult{Window: win}
 				winStart := time.Now()
-				hits, written, err := m.SyncWindow(win)
+				hits, written, err := run(win)
 				res.DurationMs = time.Since(winStart).Milliseconds()
 				res.Hits = hits
 				res.Written = written

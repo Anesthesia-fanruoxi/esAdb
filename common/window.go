@@ -167,6 +167,61 @@ func NewTimePointMs(ms int64) TimePointMs {
 	return TimePointMs{Ms: ms, Time: FormatMs(ms)}
 }
 
+// BackfillPlan 补全时间计划
+type BackfillPlan struct {
+	HasEnd       bool          `json:"hasEnd"`
+	IntervalMs   int64         `json:"intervalMs"`
+	LagMs        int64         `json:"lagMs"`
+	RangeStart   TimePointMs   `json:"rangeStart"`  // 整体起始边界（对齐后的毫秒点）
+	RangeEnd     TimePointMs   `json:"rangeEnd"`    // 整体结束边界（对齐后的毫秒点）
+	FirstWindow  TimeRangeMs   `json:"firstWindow"` // 第一个窗口 [start, end)
+	LastWindow   TimeRangeMs   `json:"lastWindow"`  // 最后一个窗口 [start, end)
+	Windows      []TimeRangeMs `json:"windows"`     // 全部窗口
+	TotalWindows int           `json:"totalWindows"`
+}
+
+// CalcBackfillPlan 补全接口时间计算
+// startMs: 必填；endMs: 0 表示不带结束时间，自动取当前 lag 边界
+func CalcBackfillPlan(startMs, endMs int64, intervalSec, lagSec int, now time.Time) (*BackfillPlan, error) {
+	intervalMs := IntervalMs(intervalSec)
+	lagMsVal := LagMs(lagSec)
+	if startMs <= 0 {
+		return nil, fmt.Errorf("start 无效")
+	}
+
+	hasEnd := endMs > 0
+	rangeStartMs := AlignFloorMs(startMs, intervalMs)
+
+	var rangeEndMs int64
+	if hasEnd {
+		rangeEndMs = AlignCeilMs(endMs, intervalMs)
+	} else {
+		// 不带结束时间：截止到当前 (now-lag) 的上一窗口结束时刻
+		_, rangeEndMs = PrevWindowMs(now.UnixMilli()-lagMsVal, intervalMs)
+	}
+
+	if rangeEndMs <= rangeStartMs {
+		return nil, fmt.Errorf("时间范围无效 startMs=%d endMs=%d", startMs, rangeEndMs)
+	}
+
+	windows := SplitWindowsMs(rangeStartMs, rangeEndMs, intervalMs)
+	if len(windows) == 0 {
+		return nil, fmt.Errorf("未生成任何窗口")
+	}
+
+	return &BackfillPlan{
+		HasEnd:       hasEnd,
+		IntervalMs:   intervalMs,
+		LagMs:        lagMsVal,
+		RangeStart:   NewTimePointMs(rangeStartMs),
+		RangeEnd:     NewTimePointMs(rangeEndMs),
+		FirstWindow:  windows[0],
+		LastWindow:   windows[len(windows)-1],
+		Windows:      windows,
+		TotalWindows: len(windows),
+	}, nil
+}
+
 // CompareSide 单侧查询范围
 type CompareSide struct {
 	StartMs int64  `json:"startMs"`
