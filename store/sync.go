@@ -183,29 +183,54 @@ func (m *Manager) SyncWindowWithRetryResult(win common.TimeRangeMs) (hits, writt
 
 // BackfillWindows 窗口补全（/sync/backfill/windows）：固定窗口粒度，逐窗 SyncWindow。
 func (m *Manager) BackfillWindows(windows []common.TimeRangeMs, rangeStart, rangeEnd string) *BackfillSummary {
-	return m.runBackfill(windows, rangeStart, rangeEnd, m.SyncWindow)
+	return m.runBackfill(windows, rangeStart, rangeEnd, m.SyncWindow, 0)
 }
 
 // BackfillWindowsAdaptive 范围补全（/sync/backfill）：以 10 分钟初始窗口并行，
 // 逐窗 SyncWindowAdaptive，命中达阈值自动分裂。独立路径，不影响窗口补全。
+// 进度换算单位窗口取自配置 Sync.Interval（默认 10 秒）。
 func (m *Manager) BackfillWindowsAdaptive(windows []common.TimeRangeMs, rangeStart, rangeEnd string) *BackfillSummary {
-	return m.runBackfill(windows, rangeStart, rangeEnd, m.SyncWindowAdaptive)
+	unitMs := int64(common.DefaultIntervalSec) * 1000
+	if m.cfg != nil && m.cfg.Sync.Interval > 0 {
+		unitMs = int64(m.cfg.Sync.Interval) * 1000
+	}
+	return m.runBackfill(windows, rangeStart, rangeEnd, m.SyncWindowAdaptive, unitMs)
 }
 
 // syncWindowFunc 单窗口处理函数：查 ES → 写 ADB
 type syncWindowFunc func(win common.TimeRangeMs) (hits, written int, err error)
 
-// runBackfill 并行补全公共执行体
-func (m *Manager) runBackfill(windows []common.TimeRangeMs, rangeStart, rangeEnd string, run syncWindowFunc) *BackfillSummary {
+// windowUnits 窗口覆盖的单位窗口数；unitMs<=0 表示不做换算（每窗口计 1）。
+// 单位窗口为增量间隔 Sync.Interval（默认 10s）：interval=10 时 10 分钟=60、5 分钟=30、2 分钟=12、1 分钟=6。
+func windowUnits(win common.TimeRangeMs, unitMs int64) int {
+	if unitMs <= 0 {
+		return 1
+	}
+	n := int((win.EndMs - win.StartMs) / unitMs)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// runBackfill 并行补全公共执行体。
+// unitMs>0 时监控进度按单位窗口换算（总数为固定单位数，completed/failed 按窗口覆盖单位数累加，
+// 百分比反映时间覆盖，不受 10/5/2/1 分钟分裂粒度影响）；unitMs<=0 时维持字面窗口计数（窗口补全）。
+func (m *Manager) runBackfill(windows []common.TimeRangeMs, rangeStart, rangeEnd string, run syncWindowFunc, unitMs int64) *BackfillSummary {
 	summary := &BackfillSummary{TotalWindows: len(windows)}
 	if len(windows) == 0 {
 		return summary
 	}
 
+	totalUnits := 0
+	for _, w := range windows {
+		totalUnits += windowUnits(w, unitMs)
+	}
+
 	if m.Monitor != nil {
 		first := windows[0]
 		last := windows[len(windows)-1]
-		m.Monitor.BeginBackfill(rangeStart, rangeEnd, len(windows), first, last)
+		m.Monitor.BeginBackfill(rangeStart, rangeEnd, totalUnits, first, last)
 		defer m.Monitor.EndBackfill()
 	}
 
@@ -233,8 +258,10 @@ func (m *Manager) runBackfill(windows []common.TimeRangeMs, rangeStart, rangeEnd
 	var (
 		mu                      sync.Mutex
 		wg                      sync.WaitGroup
-		completed               int
-		failed                  int
+		completed               int // 字面成功窗口数（用于 summary）
+		failed                  int // 字面失败窗口数（用于 summary）
+		completedUnits          int // 单位窗口完成进度
+		failedUnits             int // 单位窗口失败进度
 		totalHits               int
 		totalWritten            int
 		progressCount           int
@@ -256,17 +283,21 @@ func (m *Manager) runBackfill(windows []common.TimeRangeMs, rangeStart, rangeEnd
 					res.Error = err.Error()
 				}
 
+				units := windowUnits(win, unitMs)
 				mu.Lock()
 				if res.Error != "" {
 					failed++
+					failedUnits += units
 					failedWindows = append(failedWindows, res)
 				} else {
 					completed++
+					completedUnits += units
 				}
 				totalHits += res.Hits
 				totalWritten += res.Written
 				progressCount++
 				c, f, h, w := completed, failed, totalHits, totalWritten
+				cu, fu := completedUnits, failedUnits
 				pc := progressCount
 				total := len(windows)
 				shouldUpdate := pc%5 == 0 || c+f == total
@@ -275,7 +306,7 @@ func (m *Manager) runBackfill(windows []common.TimeRangeMs, rangeStart, rangeEnd
 				if m.Monitor != nil {
 					m.Monitor.RecordBackfillWindow(res)
 					if shouldUpdate {
-						m.Monitor.UpdateBackfillProgress(c, f, h, w, total, rangeStart, rangeEnd)
+						m.Monitor.UpdateBackfillProgress(cu, fu, h, w, totalUnits, rangeStart, rangeEnd)
 					}
 				}
 
@@ -289,7 +320,7 @@ func (m *Manager) runBackfill(windows []common.TimeRangeMs, rangeStart, rangeEnd
 	wg.Wait()
 
 	if m.Monitor != nil {
-		m.Monitor.UpdateBackfillProgress(completed, failed, totalHits, totalWritten, len(windows), rangeStart, rangeEnd)
+		m.Monitor.UpdateBackfillProgress(completedUnits, failedUnits, totalHits, totalWritten, totalUnits, rangeStart, rangeEnd)
 	}
 
 	sort.Slice(failedWindows, func(i, j int) bool {
