@@ -11,7 +11,7 @@ import (
 
 const (
 	monitorRetention    = time.Hour
-	sessionQpsMax       = 300  // 本次补全 QPS/运行时序列上限（2s 采样 ≈ 最近 10 分钟）
+	sessionQpsMax       = 600  // 本次补全 QPS/运行时序列上限（1s 采样 = 10 分钟）
 	backfillWindowsMax  = 2000 // 补全单窗口采样点上限（防整月数十万窗口无限累积内存）
 	backfillPointsMax   = 4000 // 补全进度快照上限
 )
@@ -397,7 +397,7 @@ func (mon *Monitor) buildSessionMetaLocked() BackfillSessionMeta {
 func (mon *Monitor) appendSessionSamplesLocked() {
 	now := time.Now()
 	at := now.UnixMilli()
-	if n := len(mon.sessionRuntime); n > 0 && at-mon.sessionRuntime[n-1].At < 2000 {
+	if n := len(mon.sessionRuntime); n > 0 && at-mon.sessionRuntime[n-1].At < 1000 {
 		return
 	}
 
