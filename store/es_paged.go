@@ -1,11 +1,8 @@
 package store
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 )
@@ -21,11 +18,7 @@ func (s *ESStore) SearchPaged(startMs, endMs, batch int64, after []interface{}) 
 	if batch <= 0 {
 		batch = 10000
 	}
-	dateField := s.cfg.DateField
-	if dateField == "" {
-		dateField = "@timestamp"
-	}
-	parseField := s.cfg.ParseField()
+	df := s.dateField()
 
 	bodyMap := map[string]interface{}{
 		"size": batch,
@@ -35,7 +28,7 @@ func (s *ESStore) SearchPaged(startMs, endMs, batch int64, after []interface{}) 
 					s.queryStringClause(),
 					map[string]interface{}{
 						"range": map[string]interface{}{
-							dateField: map[string]interface{}{
+							df: map[string]interface{}{
 								"gte": time.UnixMilli(startMs).UTC().Format(time.RFC3339Nano),
 								"lt":  time.UnixMilli(endMs).UTC().Format(time.RFC3339Nano),
 							},
@@ -45,7 +38,7 @@ func (s *ESStore) SearchPaged(startMs, endMs, batch int64, after []interface{}) 
 			},
 		},
 		"sort": []map[string]interface{}{
-			{dateField: map[string]interface{}{"order": "asc"}},
+			{df: map[string]interface{}{"order": "asc"}},
 			{"_id": map[string]interface{}{"order": "asc", "unmapped_type": "keyword"}},
 		},
 	}
@@ -57,28 +50,9 @@ func (s *ESStore) SearchPaged(startMs, endMs, batch int64, after []interface{}) 
 	if err != nil {
 		return nil, nil, err
 	}
-	url := strings.TrimRight(s.cfg.URL, "/") + "/" + s.cfg.Index + "/_search"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	raw, err := s.doSearch(body, 120*time.Second)
 	if err != nil {
 		return nil, nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if s.cfg.Username != "" {
-		req.SetBasicAuth(s.cfg.Username, s.cfg.Password)
-	}
-
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, err
-	}
-	if resp.StatusCode >= 300 {
-		return nil, nil, fmt.Errorf("ES 分页查询失败 status=%d body=%s", resp.StatusCode, string(raw))
 	}
 
 	var esResp esSearchResp
@@ -87,25 +61,14 @@ func (s *ESStore) SearchPaged(startMs, endMs, batch int64, after []interface{}) 
 	}
 
 	hits := esResp.Hits.Hits
-	strip := s.cfg.StripPrefix()
-	out := make([]ESRecord, 0, len(hits))
-	for _, hit := range hits {
-		content, ok := hit.Source[parseField].(string)
-		if !ok || !strings.Contains(content, strip) {
-			continue
-		}
-		idx := strings.Index(content, strip)
-		out = append(out, ESRecord{
-			Content:     content[idx:],
-			EsTimestamp: parseESTimestamp(hit.Source[dateField]),
-		})
-	}
+	out := s.recordsFromHits(hits)
+
 	// 游标取本页最后一条的 sort 值；缺失时用 [ts, _id] 手动兜底
 	var cursor []interface{}
 	if n := len(hits); n > 0 {
 		cursor = hits[n-1].Sort
 		if len(cursor) == 0 {
-			cursor = []interface{}{parseESTimestamp(hits[n-1].Source[dateField]), hits[n-1].ID}
+			cursor = []interface{}{parseESTimestamp(hits[n-1].Source[df]), hits[n-1].ID}
 		}
 	}
 	return out, cursor, nil

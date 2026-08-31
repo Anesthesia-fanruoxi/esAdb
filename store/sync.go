@@ -69,12 +69,6 @@ func (m *Manager) SyncWindow(win common.TimeRangeMs) (hits, written int, err err
 	return hits, written, nil
 }
 
-// SyncWindowWithRetry 带重试的单窗口同步
-func (m *Manager) SyncWindowWithRetry(win common.TimeRangeMs) error {
-	_, _, err := m.SyncWindowWithRetryResult(win)
-	return err
-}
-
 // SyncWindowWithRetryResult 带重试，返回最后一次尝试的 hits/written
 func (m *Manager) SyncWindowWithRetryResult(win common.TimeRangeMs) (hits, written int, err error) {
 	if m == nil || m.cfg == nil {

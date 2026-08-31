@@ -28,15 +28,76 @@ type ESRecord struct {
 	EsTimestamp int64 // Unix 毫秒
 }
 
+// esHit ES 单条命中
+type esHit struct {
+	ID     string                 `json:"_id"`
+	Sort   []interface{}          `json:"sort"`
+	Source map[string]interface{} `json:"_source"`
+}
+
 type esSearchResp struct {
 	Hits struct {
 		Total json.RawMessage `json:"total"` // ES7+: {"value":N}；旧版/兼容: 数字
-		Hits  []struct {
-			ID     string                 `json:"_id"`
-			Sort   []interface{}          `json:"sort"`
-			Source map[string]interface{} `json:"_source"`
-		} `json:"hits"`
+		Hits  []esHit         `json:"hits"`
 	} `json:"hits"`
+}
+
+// dateField 返回实际使用的日期字段
+func (s *ESStore) dateField() string {
+	if s.cfg.DateField == "" {
+		return "@timestamp"
+	}
+	return s.cfg.DateField
+}
+
+// doSearch 统一发送 ES _search 请求，返回原始响应体（覆盖鉴权、超时与状态码检查）
+func (s *ESStore) doSearch(body []byte, timeout time.Duration) ([]byte, error) {
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	url := strings.TrimRight(s.cfg.URL, "/") + "/" + s.cfg.Index + "/_search"
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if s.cfg.Username != "" {
+		req.SetBasicAuth(s.cfg.Username, s.cfg.Password)
+	}
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("ES 查询失败 status=%d body=%s", resp.StatusCode, string(raw))
+	}
+	return raw, nil
+}
+
+// recordsFromHits 将 ES hits 解析为 ESRecord：按 strip 前缀过滤正文并去掉头部
+func (s *ESStore) recordsFromHits(hits []esHit) []ESRecord {
+	strip := s.cfg.StripPrefix()
+	parseField := s.cfg.ParseField()
+	df := s.dateField()
+	out := make([]ESRecord, 0, len(hits))
+	for _, hit := range hits {
+		content, ok := hit.Source[parseField].(string)
+		if !ok || !strings.Contains(content, strip) {
+			continue
+		}
+		idx := strings.Index(content, strip)
+		out = append(out, ESRecord{
+			Content:     content[idx:],
+			EsTimestamp: parseESTimestamp(hit.Source[df]),
+		})
+	}
+	return out
 }
 
 // parseHitsTotal 兼容 ES total 两种格式
@@ -83,11 +144,6 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 	if size <= 0 {
 		size = 1000
 	}
-	dateField := s.cfg.DateField
-	if dateField == "" {
-		dateField = "@timestamp"
-	}
-	parseField := s.cfg.ParseField()
 
 	query := map[string]interface{}{
 		"size": size,
@@ -97,7 +153,7 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 					s.queryStringClause(),
 					map[string]interface{}{
 						"range": map[string]interface{}{
-							dateField: map[string]interface{}{
+							s.dateField(): map[string]interface{}{
 								"gte": start.UTC().Format(time.RFC3339Nano),
 								"lt":  end.UTC().Format(time.RFC3339Nano),
 							},
@@ -107,7 +163,7 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 			},
 		},
 		"sort": []map[string]interface{}{
-			{dateField: map[string]string{"order": "asc"}},
+			{s.dateField(): map[string]string{"order": "asc"}},
 		},
 	}
 
@@ -115,30 +171,9 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 	if err != nil {
 		return nil, err
 	}
-
-	url := strings.TrimRight(s.cfg.URL, "/") + "/" + s.cfg.Index + "/_search"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	raw, err := s.doSearch(body, 60*time.Second)
 	if err != nil {
 		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if s.cfg.Username != "" {
-		req.SetBasicAuth(s.cfg.Username, s.cfg.Password)
-	}
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("ES 查询失败 status=%d body=%s", resp.StatusCode, string(raw))
 	}
 
 	var esResp esSearchResp
@@ -146,20 +181,7 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 		return nil, err
 	}
 
-	var out []ESRecord
-	strip := s.cfg.StripPrefix()
-	for _, hit := range esResp.Hits.Hits {
-		content, ok := hit.Source[parseField].(string)
-		if !ok || !strings.Contains(content, strip) {
-			continue
-		}
-		idx := strings.Index(content, strip)
-		ts := parseESTimestamp(hit.Source[dateField])
-		out = append(out, ESRecord{
-			Content:     content[idx:],
-			EsTimestamp: ts,
-		})
-	}
+	out := s.recordsFromHits(esResp.Hits.Hits)
 	if logQuery {
 		common.Debug("ES 区间查询 [%s, %s) hits=%d",
 			start.Format("15:04:05"), end.Format("15:04:05"), len(out))
@@ -171,10 +193,6 @@ func (s *ESStore) SearchByRange(start, end time.Time, size int, logQuery bool) (
 func (s *ESStore) CountByRangeMs(startMs, endMs int64) (int, error) {
 	if strings.TrimSpace(s.cfg.URL) == "" {
 		return 0, fmt.Errorf("ES 未配置")
-	}
-	dateField := s.cfg.DateField
-	if dateField == "" {
-		dateField = "@timestamp"
 	}
 
 	start := time.UnixMilli(startMs)
@@ -189,7 +207,7 @@ func (s *ESStore) CountByRangeMs(startMs, endMs int64) (int, error) {
 					s.queryStringClause(),
 					map[string]interface{}{
 						"range": map[string]interface{}{
-							dateField: map[string]interface{}{
+							s.dateField(): map[string]interface{}{
 								"gte": start.UTC().Format(time.RFC3339Nano),
 								"lt":  end.UTC().Format(time.RFC3339Nano),
 							},
@@ -204,28 +222,11 @@ func (s *ESStore) CountByRangeMs(startMs, endMs int64) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	url := strings.TrimRight(s.cfg.URL, "/") + "/" + s.cfg.Index + "/_search"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	raw, err := s.doSearch(body, 60*time.Second)
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if s.cfg.Username != "" {
-		req.SetBasicAuth(s.cfg.Username, s.cfg.Password)
-	}
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, err
-	}
-	if resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("ES count 失败 status=%d body=%s", resp.StatusCode, string(raw))
-	}
+
 	var esResp esSearchResp
 	if err := json.Unmarshal(raw, &esResp); err != nil {
 		return 0, err

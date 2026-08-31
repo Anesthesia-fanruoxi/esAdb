@@ -10,7 +10,8 @@ import (
 
 // BackfillRangePaged 范围补全（全量分页模式）：
 // 不切窗口，整段范围 search_after 复合排序翻页，每批 batch 条：查 ES → 解析去重 → REPLACE INTO ADB。
-// 失败批次记录时间区间（事后可用窗口补全修复）；estBatches 为外部预估批次数（进度分母），<=0 时内部自行估算。
+// 失败批次仅计数（Failed），不记录断点/剩余区间——补全数据仅供内存展示，重启即失效，失败重跑即可；
+// estBatches 为外部预估批次数（进度分母），<=0 时内部自行估算。
 func (m *Manager) BackfillRangePaged(startMs, endMs int64, batch, estBatches int) *BackfillSummary {
 	summary := &BackfillSummary{}
 	if m == nil || m.ES == nil || m.MySQL == nil {
@@ -74,19 +75,6 @@ func (m *Manager) BackfillRangePaged(startMs, endMs int64, batch, estBatches int
 		}
 		if lastErr != nil {
 			res.Error = fmt.Sprintf("ES 查询失败: %v", lastErr)
-			// 记录真实断点：从当前游标到范围末尾（供窗口补全修复）
-			if len(cursor) > 0 {
-				var curTs int64
-				switch v := cursor[0].(type) {
-				case float64:
-					curTs = int64(v)
-				case int64:
-					curTs = v
-				}
-				if curTs > 0 {
-					res.Window = common.NewTimeRangeMs(curTs, endMs)
-				}
-			}
 		}
 
 		// 解析 + 写 ADB（带重试）
@@ -104,14 +92,13 @@ func (m *Manager) BackfillRangePaged(startMs, endMs int64, batch, estBatches int
 			}
 			res.Hits = len(records)
 			res.Written = written
-			// 批次时间区间 = 本批首尾 es_timestamp（失败批次可据此用窗口补全修复）
+			// 批次时间区间 = 本批首尾 es_timestamp（仅作监控展示）
 			res.Window = common.NewTimeRangeMs(records[0].EsTimestamp, records[len(records)-1].EsTimestamp+1)
 		}
 		res.DurationMs = time.Since(batchStart).Milliseconds()
 
 		if res.Error != "" {
 			summary.Failed++
-			summary.Windows = append(summary.Windows, res)
 		} else {
 			summary.TotalWindows++
 		}
@@ -127,12 +114,10 @@ func (m *Manager) BackfillRangePaged(startMs, endMs int64, batch, estBatches int
 		common.Debug("[backfill-paged] 批次 %d hits=%d written=%d 耗时=%dms",
 			batchNo, res.Hits, res.Written, res.DurationMs)
 
-		// 终止：本页游标为空（已到范围末尾）；ES 查询失败时游标为空，
-		// 剩余区间已记入失败批次（res.Window），可用窗口补全修复
+		// 终止：本页游标为空（已到范围末尾）；ES 查询失败时游标为空，不再续传，直接结束
 		if len(next) == 0 {
 			if lastErr != nil {
-				common.Error("[backfill-paged] ES 查询失败终止，剩余区间 [%s, %s) 未补全",
-					common.FormatMs(res.Window.StartMs), common.FormatMs(endMs))
+				common.Error("[backfill-paged] ES 查询失败，本批次起剩余区间未补全")
 			}
 			break
 		}
