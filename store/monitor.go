@@ -2,6 +2,7 @@ package store
 
 import (
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 
 const (
 	monitorRetention    = time.Hour
-	sessionQpsMax       = 600  // 本次补全 QPS 序列上限
+	sessionQpsMax       = 300  // 本次补全 QPS/运行时序列上限（2s 采样 ≈ 最近 10 分钟）
 	backfillWindowsMax  = 2000 // 补全单窗口采样点上限（防整月数十万窗口无限累积内存）
 	backfillPointsMax   = 4000 // 补全进度快照上限
 )
@@ -63,13 +64,13 @@ type QpsPoint struct {
 
 // RuntimePoint 本次补全会话服务运行时序列点
 type RuntimePoint struct {
-	At            int64   `json:"at"`
-	AtStr         string  `json:"atStr"`
-	HeapAllocMB   float64 `json:"heapAllocMB"`
-	HeapSysMB     float64 `json:"heapSysMB"`
-	SysMB         float64 `json:"sysMB"`
-	NumGoroutine  int     `json:"numGoroutine"`
-	NumGC         uint32  `json:"numGC"`
+	At           int64   `json:"at"`
+	AtStr        string  `json:"atStr"`
+	HeapAllocMB  float64 `json:"heapAllocMB"`
+	HeapSysMB    float64 `json:"heapSysMB"`
+	GcPerSec     float64 `json:"gcPerSec"`  // 每秒 GC 次数（相邻采样差值）
+	NumGoroutine int     `json:"numGoroutine"`
+	AvgWindowMs  float64 `json:"avgWindowMs"` // 上个采样间隔内窗口平均耗时（毫秒）
 }
 
 // BackfillSessionMeta 本次补全会话元信息（详情弹框「本次进度」）
@@ -149,6 +150,9 @@ type Monitor struct {
 	backfillActive   bool
 	currentBackfill  *BackfillProgressPoint
 	backfillStarted  time.Time
+	rtLastNumGC uint32 // 上次采样的 GC 累计值（用于计算每秒速率）
+	bfWinCount  int64  // 上次采样以来完成的补全窗口数（算平均耗时用）
+	bfDurSumMs  int64  // 上次采样以来窗口耗时总和（毫秒）
 
 	jobCh  chan monitorJob
 	subsMu sync.RWMutex
@@ -393,7 +397,7 @@ func (mon *Monitor) buildSessionMetaLocked() BackfillSessionMeta {
 func (mon *Monitor) appendSessionSamplesLocked() {
 	now := time.Now()
 	at := now.UnixMilli()
-	if n := len(mon.sessionRuntime); n > 0 && at-mon.sessionRuntime[n-1].At < 800 {
+	if n := len(mon.sessionRuntime); n > 0 && at-mon.sessionRuntime[n-1].At < 2000 {
 		return
 	}
 
@@ -441,14 +445,33 @@ func (mon *Monitor) appendSessionSamplesLocked() {
 
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
+	var gcPerSec float64
+	if n := len(mon.sessionRuntime); n > 0 {
+		sec := float64(at-mon.sessionRuntime[n-1].At) / 1000
+		if sec < 0.001 {
+			sec = 0.001
+		}
+		dGC := int64(ms.NumGC - mon.rtLastNumGC) // uint32 回绕安全
+		if dGC < 0 {
+			dGC = 0
+		}
+		gcPerSec = round1(float64(dGC) / sec)
+	}
+	mon.rtLastNumGC = ms.NumGC
+	var avgWinMs float64
+	if mon.bfWinCount > 0 {
+		avgWinMs = round1(float64(mon.bfDurSumMs) / float64(mon.bfWinCount))
+		mon.bfWinCount = 0
+		mon.bfDurSumMs = 0
+	}
 	mon.sessionRuntime = append(mon.sessionRuntime, RuntimePoint{
 		At:           at,
 		AtStr:        common.FormatMs(at),
 		HeapAllocMB:  round1(float64(ms.Alloc) / (1 << 20)),
 		HeapSysMB:    round1(float64(ms.HeapSys) / (1 << 20)),
-		SysMB:        round1(float64(ms.Sys) / (1 << 20)),
+		GcPerSec:     gcPerSec,
 		NumGoroutine: runtime.NumGoroutine(),
-		NumGC:        ms.NumGC,
+		AvgWindowMs:  avgWinMs,
 	})
 	if len(mon.sessionRuntime) > sessionQpsMax {
 		mon.sessionRuntime = mon.sessionRuntime[len(mon.sessionRuntime)-sessionQpsMax:]
@@ -505,6 +528,9 @@ func (mon *Monitor) BeginBackfill(rangeStart, rangeEnd string, totalWindows int,
 		mon.sessionFinished = time.Time{}
 		mon.sessionQps = mon.sessionQps[:0]
 		mon.sessionRuntime = mon.sessionRuntime[:0]
+		mon.rtLastNumGC = 0
+		mon.bfWinCount = 0
+		mon.bfDurSumMs = 0
 		mon.qpsSampleAt = time.Time{}
 		mon.qpsSampleDone = 0
 		mon.qpsSampleHits = 0
@@ -545,6 +571,8 @@ func (mon *Monitor) RecordBackfillWindow(res WindowSyncResult) {
 		if n := len(mon.backfillWindows); n > backfillWindowsMax {
 			mon.backfillWindows = mon.backfillWindows[n-backfillWindowsMax:]
 		}
+		mon.bfWinCount++
+		mon.bfDurSumMs += res.DurationMs
 		mon.mu.Unlock()
 		mon.prune(now)
 		mon.broadcast(SSEMessage{Event: "backfill_window", Data: pt})
@@ -614,5 +642,7 @@ func (mon *Monitor) EndBackfill() {
 		}
 		mon.mu.Unlock()
 		mon.broadcast(SSEMessage{Event: "pipeline", Data: mon.Pipeline()})
+		// 归还空闲内存给 OS（HeapSys/Sys 指标不回落，但实际占用立即下降）
+		go debug.FreeOSMemory()
 	})
 }

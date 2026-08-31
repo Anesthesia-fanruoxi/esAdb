@@ -36,3 +36,4 @@ sync:
   retry_delay_max: 10
   backfill_workers: 2     # 补全并行数，建议 1~4，避免打满 ES/ADB
   backfill_pause_ms: 50   # 每窗口完成后暂停毫秒，0=不停；负载高可调到 100~200
+  backfill_batch: 10000   # 范围补全单批拉取条数（search_after 分页）

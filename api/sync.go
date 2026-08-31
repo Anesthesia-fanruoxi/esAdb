@@ -48,8 +48,8 @@ type winBrief struct {
 	Diff  int    `json:"diff"`
 }
 
-// HandleBackfill GET/POST /sync/backfill  范围补全
-// 入参：{ start, end }（可含 query），由后端按同步 interval/lag 切窗后统一补全。
+// HandleBackfill GET/POST /sync/backfill  范围补全（全量分页模式）
+// 入参：{ start, end }（可含 query），整段范围 search_after 翻页补全，每批 backfill_batch 条。
 // 窗口补全请使用 /sync/backfill/windows。
 func (a *SyncAPI) HandleBackfill(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
@@ -67,7 +67,6 @@ func (a *SyncAPI) HandleBackfill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 范围补全（连续范围，先切窗再补全）
 	if req.Start == "" {
 		common.WriteFail(w, http.StatusBadRequest, 2, "缺少 start")
 		return
@@ -84,10 +83,37 @@ func (a *SyncAPI) HandleBackfill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan, err := common.CalcBackfillPlan(startMs, endMs, a.cfg.Sync.Interval, a.cfg.Sync.LagSeconds, time.Now())
-	if err != nil {
-		common.WriteFail(w, http.StatusBadRequest, 5, err.Error())
+	// 边界对齐（与窗口补全同规则）：start 向下、end 向上；无 end 则截止到 lag 边界
+	intervalMs := common.IntervalMs(a.cfg.Sync.Interval)
+	rangeStartMs := common.AlignFloorMs(startMs, intervalMs)
+	var rangeEndMs int64
+	if endMs > 0 {
+		rangeEndMs = common.AlignCeilMs(endMs, intervalMs)
+	} else {
+		_, rangeEndMs = common.PrevWindowMs(time.Now().UnixMilli()-common.LagMs(a.cfg.Sync.LagSeconds), intervalMs)
+	}
+	if rangeEndMs <= rangeStartMs {
+		common.WriteFail(w, http.StatusBadRequest, 5, "时间范围无效")
 		return
+	}
+
+	// 预估批次数（进度分母，实际以补全为准）
+	batch := a.cfg.Sync.BackfillBatch
+	totalDocs, _ := a.mgr.ES.CountByRangeMs(rangeStartMs, rangeEndMs)
+	estBatches := 1
+	if totalDocs > 0 {
+		estBatches = (totalDocs + batch - 1) / batch
+	}
+	plan := map[string]interface{}{
+		"hasEnd":       endMs > 0,
+		"mode":         "paged",
+		"batch":        batch,
+		"totalDocs":    totalDocs,
+		"totalWindows": estBatches, // 兼容前端字段：此处为预估批次数
+		"rangeStart":   common.NewTimePointMs(rangeStartMs),
+		"rangeEnd":     common.NewTimePointMs(rangeEndMs),
+		"firstWindow":  common.NewTimeRangeMs(rangeStartMs, rangeEndMs),
+		"lastWindow":   common.NewTimeRangeMs(rangeStartMs, rangeEndMs),
 	}
 
 	if !a.bfMu.TryLock() {
@@ -97,10 +123,10 @@ func (a *SyncAPI) HandleBackfill(w http.ResponseWriter, r *http.Request) {
 	}
 	defer a.bfMu.Unlock()
 
-	common.Info("[backfill] 开始范围补全 totalWindows=%d range=[%s, %s)",
-		plan.TotalWindows, plan.RangeStart.Time, plan.RangeEnd.Time)
+	common.Info("[backfill] 开始范围补全(分页) estBatches=%d totalDocs=%d range=[%s, %s)",
+		estBatches, totalDocs, common.FormatMs(rangeStartMs), common.FormatMs(rangeEndMs))
 
-	summary := a.mgr.BackfillWindows(plan.Windows, plan.RangeStart.Time, plan.RangeEnd.Time)
+	summary := a.mgr.BackfillRangePaged(rangeStartMs, rangeEndMs, batch, estBatches)
 	common.Info("[backfill] 完成 hits=%d written=%d failed=%d",
 		summary.TotalHits, summary.TotalWritten, summary.Failed)
 

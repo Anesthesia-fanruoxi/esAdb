@@ -12,10 +12,11 @@ import (
 
 // WindowSyncResult 单窗口同步结果
 type WindowSyncResult struct {
-	Window  common.TimeRangeMs `json:"window"`
-	Hits    int                `json:"hits"`
-	Written int                `json:"written"`
-	Error   string             `json:"error,omitempty"`
+	Window     common.TimeRangeMs `json:"window"`
+	Hits       int                `json:"hits"`
+	Written    int                `json:"written"`
+	DurationMs int64              `json:"durationMs,omitempty"`
+	Error      string             `json:"error,omitempty"`
 }
 
 // BackfillSummary 补全汇总
@@ -167,7 +168,9 @@ func (m *Manager) BackfillWindows(windows []common.TimeRangeMs, rangeStart, rang
 			defer wg.Done()
 			for win := range ch {
 				res := WindowSyncResult{Window: win}
+				winStart := time.Now()
 				hits, written, err := m.SyncWindow(win)
+				res.DurationMs = time.Since(winStart).Milliseconds()
 				res.Hits = hits
 				res.Written = written
 				if err != nil {

@@ -787,7 +787,6 @@
                 <span class="modal-chart-legend">
                   <i style="background:#0e7c86"></i>写入
                   <i style="background:#34d399"></i>命中
-                  <i style="background:#9aa6b2"></i>窗口
                 </span>
               </h4>
               <div class="modal-chart-stage" id="bfQpsStage">
@@ -806,7 +805,7 @@
               </div>
             </div>
             <div class="modal-chart-cell">
-              <h4>服务 · 进程 Sys MB</h4>
+              <h4>服务 · 窗口均耗时</h4>
               <div class="modal-chart-stage" id="bfSysStage">
                 <svg id="bfSysSvg"></svg>
               </div>
@@ -818,7 +817,7 @@
               </div>
             </div>
             <div class="modal-chart-cell">
-              <h4>服务 · GC 次数</h4>
+              <h4>服务 · GC 次/秒</h4>
               <div class="modal-chart-stage" id="bfGcStage">
                 <svg id="bfGcSvg"></svg>
               </div>
@@ -1188,20 +1187,19 @@
       drawLineChart(bfQpsStage, bfQpsSvg, qps, [
         { key: 'writeQps', color: '#0e7c86' },
         { key: 'hitQps', color: '#34d399' },
-        { key: 'windowQps', color: '#9aa6b2' },
       ], { emptyText: '暂无 QPS 数据' });
       drawLineChart(bfMemStage, bfMemSvg, rt, [
         { key: 'heapAllocMB', color: '#0e7c86' },
         { key: 'heapSysMB', color: '#94a3b8' },
       ], { fmtY: v => v.toFixed(1), emptyText: '暂无内存数据' });
       drawLineChart(bfSysStage, bfSysSvg, rt, [
-        { key: 'sysMB', color: '#6366f1' },
-      ], { fmtY: v => v.toFixed(1), emptyText: '暂无进程内存数据' });
+        { key: 'avgWindowMs', color: '#6366f1' },
+      ], { fmtY: v => String(Math.round(v)), emptyText: '暂无窗口耗时数据' });
       drawLineChart(bfGoStage, bfGoSvg, rt, [
         { key: 'numGoroutine', color: '#6366f1' },
       ], { emptyText: '暂无 Goroutine 数据' });
       drawLineChart(bfGcStage, bfGcSvg, rt, [
-        { key: 'numGC', color: '#f59e0b' },
+        { key: 'gcPerSec', color: '#f59e0b' },
       ], { emptyText: '暂无 GC 数据' });
     }
 
@@ -1356,7 +1354,7 @@
         }
         const s = resp.data.summary;
         box.className = 'result ok';
-        box.textContent = `完成 · 窗口 ${s.totalWindows} · hits ${s.totalHits} · 写入 ${s.totalWritten} · 失败 ${s.failed}`;
+        box.textContent = `完成 · 批次 ${s.totalWindows} · hits ${s.totalHits} · 写入 ${s.totalWritten} · 失败 ${s.failed}`;
         log('[补全] 完成 hits=' + s.totalHits + ' written=' + s.totalWritten);
       } catch (e) {
         box.className = 'result fail';
@@ -1423,7 +1421,7 @@
         } else {
           const s = resp.data.summary;
           document.getElementById('cmpRange').textContent =
-            '整范围补全完成 · 窗口 ' + s.totalWindows + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed;
+            '整范围补全完成 · 批次 ' + s.totalWindows + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed;
           log('[补全] 整范围完成 written=' + s.totalWritten + ' failed=' + s.failed);
         }
       } catch (e) { alert('补全请求失败: ' + (e.message || e)); log('[补全] 请求失败', true); }
@@ -1513,7 +1511,7 @@
           anProg('整体重同步失败: ' + resp.message, 'fail');
         } else {
           const s = resp.data.summary;
-          anProg('整体重同步完成 · 窗口 ' + s.totalWindows + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed, 'ok');
+          anProg('整体重同步完成 · 批次 ' + s.totalWindows + ' · 写入 ' + s.totalWritten + ' · 失败 ' + s.failed, 'ok');
           log('[整体重同步] 完成 written=' + s.totalWritten + ' failed=' + s.failed);
         }
       } catch (e) { anProg('整体重同步请求失败: ' + (e.message || e), 'fail'); }

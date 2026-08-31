@@ -77,6 +77,7 @@ type SyncConfig struct {
 	RetryDelayMax    int `mapstructure:"retry_delay_max"`    // 重试最大延迟（秒）
 	BackfillWorkers  int `mapstructure:"backfill_workers"`   // 补全并行 worker 数，默认 2（限流，避免打满）
 	BackfillPauseMs  int `mapstructure:"backfill_pause_ms"`  // 每个窗口完成后暂停毫秒，默认 50；0=不停
+	BackfillBatch    int `mapstructure:"backfill_batch"`     // 范围补全单批拉取条数（search_after 分页），默认 10000
 }
 
 var global *Config
@@ -118,6 +119,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("sync.retry_delay_max", 10)
 	v.SetDefault("sync.backfill_workers", 2)
 	v.SetDefault("sync.backfill_pause_ms", 50)
+	v.SetDefault("sync.backfill_batch", 10000)
 
 	cfg := &Config{}
 	if path == "" {
@@ -143,7 +145,7 @@ func Load(path string) (*Config, error) {
 		"es.fields", "es.dateField", "es.strip",
 		"mysql.dsn", "mysql.host", "mysql.port", "mysql.user", "mysql.password", "mysql.database", "mysql.table",
 		"sync.interval", "sync.lag_seconds", "sync.max_size", "sync.batch_size", "sync.max_time", "sync.max_retry",
-		"sync.retry_delay", "sync.retry_delay_max", "sync.backfill_workers", "sync.backfill_pause_ms",
+		"sync.retry_delay", "sync.retry_delay_max", "sync.backfill_workers", "sync.backfill_pause_ms", "sync.backfill_batch",
 	}
 	for _, k := range keys {
 		_ = v.BindEnv(k)
@@ -210,6 +212,9 @@ func (c *Config) normalize() {
 	}
 	if c.Sync.BackfillPauseMs < 0 {
 		c.Sync.BackfillPauseMs = 50
+	}
+	if c.Sync.BackfillBatch <= 0 {
+		c.Sync.BackfillBatch = 10000
 	}
 	if c.MySQL.DSN == "" && c.MySQL.Host != "" && c.MySQL.User != "" && c.MySQL.Database != "" {
 		c.MySQL.DSN = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",

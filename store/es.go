@@ -32,6 +32,8 @@ type esSearchResp struct {
 	Hits struct {
 		Total json.RawMessage `json:"total"` // ES7+: {"value":N}；旧版/兼容: 数字
 		Hits  []struct {
+			ID     string                 `json:"_id"`
+			Sort   []interface{}          `json:"sort"`
 			Source map[string]interface{} `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
