@@ -55,6 +55,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mgr.StartIncremental(ctx)
+	mgr.StartAutoCompare()
 
 	addr := cfg.Server.Addr
 	if *port > 0 {

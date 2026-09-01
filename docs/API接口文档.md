@@ -12,7 +12,7 @@
 | GET | `/monitor/sse` | SSE 实时监控流（增量 / 补全侧栏 / 接线图） |
 | GET | `/monitor/backfill/sse` | 补全详情弹框 SSE（约 1Hz，含 QPS / 运行时序列） |
 | GET | `/sync/compare/drilldown/sse` | 四级下钻 SSE（日→小时→5分钟→10秒窗），定位异常时间窗 |
-| POST / GET | `/sync/backfill` | 补全（历史回填）：**范围补全**，后端按 interval 切窗 |
+| POST / GET | `/sync/backfill` | 补全（历史回填）：**范围补全**，10 分钟初始窗口 + 命中自适应分裂（10→5→2→1 分钟） |
 | POST | `/sync/backfill/windows` | 补全（历史回填）：**窗口补全**，按窗口列表直接回填（可多个、可不连续） |
 | POST / GET | `/sync/compare` | ES 与 ADB 条数对比 |
 
@@ -108,6 +108,8 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 }
 ```
 
+> 计数语义：**范围补全**按"单位窗口"换算（单位窗口 = 增量间隔 `sync.interval`，默认 10 秒）：`totalWindows` 为范围覆盖的单位窗口总数，`completed/failed` 按每个完成窗口覆盖的单位窗口数累加（10 分钟=60、5 分钟=30、2 分钟=12、1 分钟=6），`percent` 反映**时间覆盖比例**；**窗口补全**为字面窗口计数。
+
 **BackfillWindowPoint**
 
 ```json
@@ -154,7 +156,7 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
     { "at": 1756281600500, "atStr": "...", "writeQps": 0.0,   "windowQps": 0.0,  "hitQps": 0.0 }
   ],
   "runtimeSeries": [
-    { "at": 1756281600000, "atStr": "...", "heapAllocMB": 42.1, "heapSysMB": 80.0, "sysMB": 95.0, "numGoroutine": 18, "numGC": 12 }
+    { "at": 1756281600000, "atStr": "...", "heapAllocMB": 42.1, "heapSysMB": 80.0, "gcPerSec": 0.5, "numGoroutine": 18, "avgWindowMs": 812.3 }
   ]
 }
 ```
@@ -167,15 +169,15 @@ Server-Sent Events（`text/event-stream`），保持长连接，每 5 秒心跳�
 | `progress` | BackfillProgressPoint | 本次补全整体进度（见下表），空闲时为 `null` |
 | `session` | BackfillSessionMeta | 本次补全会话元信息 |
 | `qpsSeries` | []QpsPoint | 每秒写入/命中/窗口 QPS 采样，最多 600 点（约最近 10 分钟） |
-| `runtimeSeries` | []RuntimePoint | 每秒运行时采样（堆内存/Sys/协程/GC），最多 600 点 |
+| `runtimeSeries` | []RuntimePoint | 每秒运行时采样（堆内存/协程/GC 次/秒/窗口均耗时），最多 600 点（约最近 10 分钟） |
 
 **progress 明细（即弹框「本次进度」）**
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `totalWindows` | int | 总窗口数 |
-| `completed` | int | 成功窗口数 |
-| `failed` | int | 失败窗口数 |
+| `totalWindows` | int | 总窗口数（范围补全 = 单位窗口总数；窗口补全 = 字面窗口数） |
+| `completed` | int | 成功数（范围补全按单位窗口累加，见上方计数语义） |
+| `failed` | int | 失败数（同上） |
 | `totalHits` | int | ES 命中总数 |
 | `totalWritten` | int | ADB 写入总数 |
 | `percent` | float | 完成百分比（0~100） |
@@ -251,7 +253,7 @@ SSE 事件：`range` → 每窗口 `progress` → `done`（或 `error`）。
 
 | 接口 | 方式 | 适用场景 |
 |---|---|---|
-| `POST / GET /sync/backfill` | **范围补全** | 连续范围，后端按 `sync.interval` 切窗后统一回填（整体重同步 / 补全天） |
+| `POST / GET /sync/backfill` | **范围补全** | 连续范围，10 分钟初始窗口 + 命中自适应分裂（10→5→2→1 分钟）回填（整体重同步 / 补全天） |
 | `POST /sync/backfill/windows` | **窗口补全** | 按窗口列表直接回填，可多个、可不连续（补下钻定位的异常窗） |
 
 ### 5.1 范围补全  POST/GET /sync/backfill
@@ -276,21 +278,23 @@ SSE 事件：`range` → 每窗口 `progress` → `done`（或 `error`）。
 ```json
 {
   "plan": {
-    "hasEnd": false, "intervalMs": 10000, "lagMs": 60000,
+    "hasEnd": false, "intervalMs": 600000, "lagMs": 60000,
     "rangeStart": { "ms": 0, "time": "2026-08-01 00:00:00.000" },
     "rangeEnd":   { "ms": 0, "time": "2026-08-29 00:00:00.000" },
     "firstWindow": { "TimeRangeMs" },
     "lastWindow":  { "TimeRangeMs" },
     "windows": [ "TimeRangeMs..." ],
-    "totalWindows": 5758
+    "totalWindows": 4032
   },
   "summary": {
-    "totalWindows": 5758, "workers": 2,
+    "totalWindows": 4032, "workers": 2,
     "totalHits": 123456, "totalWritten": 123450, "failed": 0,
-    "windows": [ { "window": {...}, "hits": 12, "written": 12, "error": "" } ]
+    "windows": [ { "window": {...}, "hits": 12, "written": 12, "durationMs": 85, "error": "" } ]
   }
 }
 ```
+
+> `plan.intervalMs` 固定为 `600000`（10 分钟初始窗口，`store.BackfillBaseIntervalSec`）；`plan.totalWindows` 与 `summary.totalWindows` 均为**初始 10 分钟窗口数**（自适应分裂不改变该值）；`summary.windows` 仅含失败窗口明细。
 
 ### 5.2 窗口补全  POST /sync/backfill/windows
 

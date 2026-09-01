@@ -5,7 +5,7 @@ WORKDIR /go/src/es-adb
 
 COPY es-adb .
 
-# 配置由 K8s 挂载到 /config/config.yaml，不打进镜像
+# 配置挂载到 /config/config.yaml，不打进镜像
 EXPOSE 8080
 
 CMD ["./es-adb", "-c", "/config/config.yaml"]

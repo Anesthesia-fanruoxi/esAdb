@@ -15,6 +15,9 @@ type Manager struct {
 	MySQL   *MySQLStore
 	Syncer  *Syncer
 	Monitor *Monitor
+
+	BackfillMu sync.Mutex // 补全任务互斥（手动接口与自动任务共用）
+	DrillMu    sync.Mutex // 异常分析互斥（手动接口与自动任务共用）
 }
 
 var (

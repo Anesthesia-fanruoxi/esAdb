@@ -455,6 +455,8 @@
 
     /* 精准分析弹框 */
     .an-modal { width: 85vw; height: 85vh; max-width: 85vw; max-height: 85vh; }
+    #bfModal .modal { width: 85vw; height: 85vh; max-width: 85vw; max-height: 85vh; }
+    .card.bf-card, .card.an-card { cursor: pointer; }
     .an-modal-body { overflow: hidden; }
     .an-modal .an-pane.active { flex: 1; min-height: 0; overflow-y: auto; }
 
@@ -657,22 +659,30 @@
 
       <!-- 右：侧栏 -->
       <div class="col-side">
-        <div class="card">
-          <div class="card-head"><h2>补全进度</h2><span class="tag">点击进度条查看详情</span></div>
+        <div class="card bf-card" id="bfCard" title="点击卡片查看补全详情">
+          <div class="card-head"><h2>补全进度</h2><span class="tag">点击卡片查看详情</span></div>
           <div class="card-body chart-wrap">
-            <div class="bar" id="bfBarWrap" title="点击打开详情"><i id="bfBar"></i></div>
+            <div class="bar" id="bfBarWrap"><i id="bfBar"></i></div>
             <div class="bf-meta">
               <span id="bfPct">0%</span>
               <span id="bfDone">0/0 窗口</span>
             </div>
             <p id="bfTxt" style="font-size:.72rem;color:var(--muted);margin-bottom:4px"></p>
-            <p class="bf-click-hint">点击进度条打开详情弹框（独立 SSE）</p>
+            <p class="bf-click-hint">点击卡片打开详情弹框（独立 SSE）</p>
           </div>
         </div>
 
-        <div class="card">
-          
-          
+        <div class="card an-card" id="anCard" title="点击卡片查看分析详情">
+          <div class="card-head"><h2>分析进度</h2><span class="tag" id="anCardTag">空闲</span></div>
+          <div class="card-body chart-wrap">
+            <div class="bar" id="anCardBarWrap"><i id="anCardBar"></i></div>
+            <div class="bf-meta">
+              <span id="anCardPct">0%</span>
+              <span id="anCardDone">--</span>
+            </div>
+            <p id="anCardTxt" style="font-size:.72rem;color:var(--muted);margin-bottom:4px"></p>
+            <p class="bf-click-hint">点击卡片查看分析详情</p>
+          </div>
         </div>
 
         <div class="card">
@@ -704,27 +714,6 @@
               <button type="button" class="btn btn-primary" id="btnCmpAnalyze" disabled onclick="cmpAnalyze()">分析异常(整范围)</button>
               <span class="hint" style="margin-left:8px;flex:1">对比出异常后，选择直接补全整个范围，或分析异常按 日→时→5分→10秒 下钻定位</span>
             </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h2>精准分析</h2><span class="tag" id="anStatus">空闲</span></div>
-          <div class="card-body">
-            <div class="form-row">
-              <label>开始<input type="text" id="anStart" placeholder="默认昨天 00:00:00"></label>
-              <label>结束<input type="text" id="anEnd" placeholder="默认今天 00:00:00"></label>
-              <button class="btn btn-primary" id="btnAnalyze" onclick="doAnalyze()">开始分析</button>
-            </div>
-            <div class="quick-range">
-              <span>快捷：</span>
-              <button type="button" class="btn btn-mini" data-k="today" onclick="setAnQuick('today')">今天</button>
-              <button type="button" class="btn btn-mini" data-k="yesterday" onclick="setAnQuick('yesterday')">昨天</button>
-              <button type="button" class="btn btn-mini" data-k="week" onclick="setAnQuick('week')">本周</button>
-              <button type="button" class="btn btn-mini" data-k="lastweek" onclick="setAnQuick('lastweek')">上周</button>
-              <button type="button" class="btn btn-mini" data-k="month" onclick="setAnQuick('month')">本月</button>
-              <button type="button" class="btn btn-mini" data-k="lastmonth" onclick="setAnQuick('lastmonth')">上月</button>
-            </div>
-            <p class="hint">金字塔下钻：日 → 小时 → 5分钟 → 10秒，逐级剪枝，仅展示异常窗口</p>
           </div>
         </div>
 
@@ -1253,7 +1242,7 @@
       }
     }
 
-    document.getElementById('bfBarWrap').addEventListener('click', openBfModal);
+    document.getElementById('bfCard').addEventListener('click', openBfModal);
     document.getElementById('bfModalClose').addEventListener('click', closeBfModal);
     document.getElementById('bfModal').addEventListener('click', e => {
       if (e.target.id === 'bfModal') closeBfModal();
@@ -1431,9 +1420,6 @@
     function cmpAnalyze() {
       const r = cmpCtx;
       if (!r) return;
-      document.getElementById('anStart').value = r.start;
-      document.getElementById('anEnd').value = r.end;
-      document.getElementById('anModal').classList.add('open');
       if (anEs) { try { anEs.close(); } catch (_) {} anEs = null; }
       runAnalyze(r.start, r.end);
     }
@@ -1446,13 +1432,15 @@
     let anState = { range: null, total: [0, 0, 0, 0], abn: [0, 0, 0, 0], diffSum: [0, 0, 0, 0], list: [] };
 
     function anTag(v) {
-      document.getElementById('anStatus').textContent = v;
       document.getElementById('anModalTag').textContent = v;
+      document.getElementById('anCardTag').textContent = v;
     }
     function anProg(t, cls) {
       const el = document.getElementById('anProg');
       el.className = 'result' + (cls ? ' ' + cls : '');
       el.textContent = t;
+      const ct = document.getElementById('anCardTxt');
+      if (ct) ct.textContent = t;
     }
     function fmtAnRange(r) {
       const s = String(r.start || ''), e = String(r.end || '');
@@ -1467,10 +1455,19 @@
       document.getElementById('anSummary').innerHTML = '';
       document.getElementById('anProg').className = 'result';
       document.getElementById('anProg').textContent = '等待分析...';
+      const cb = document.getElementById('anCardBar'); if (cb) cb.style.width = '0';
+      const cp = document.getElementById('anCardPct'); if (cp) cp.textContent = '0%';
+      const cd = document.getElementById('anCardDone'); if (cd) cd.textContent = '--';
+      const ct = document.getElementById('anCardTxt'); if (ct) ct.textContent = '';
     }
     function anSetPct(pct) {
+      pct = Math.max(0, Math.min(100, Math.round(pct)));
       const el = document.getElementById('anBarFill');
-      if (el) el.style.width = Math.max(0, Math.min(100, Math.round(pct))) + '%';
+      if (el) el.style.width = pct + '%';
+      const cb = document.getElementById('anCardBar');
+      if (cb) cb.style.width = pct + '%';
+      const cp = document.getElementById('anCardPct');
+      if (cp) cp.textContent = pct + '%';
     }
     const AN_PHASE = ['日窗口','小时窗口','5分钟窗口','10秒窗口'];
     // 分析过程中仅接收每窗口的进度计数 progress（不含窗口明细），驱动进度条逐步推进；
@@ -1630,7 +1627,6 @@
     function runAnalyze(startStr, endStr) {
       if (anEs) { try { anEs.close(); } catch (_) {} anEs = null; }
       anReset();
-      document.getElementById('btnAnalyze').disabled = true;
       anTag('分析中');
       anProg('已连接，正在金字塔下钻（日 → 小时 → 5分钟 → 10秒）...');
       log('[精准分析] 开始 ' + startStr + (endStr ? ' ~ ' + endStr : ''));
@@ -1645,6 +1641,8 @@
         const frac = (lv - 1) + (d.total ? (d.done || 0) / d.total : 0);
         anSetPct(frac / 4 * 100);
         anProg('正在对比' + AN_PHASE[lv - 1] + '… ' + (d.done || 0) + ' / ' + (d.total || 0));
+        const cd = document.getElementById('anCardDone');
+        if (cd) cd.textContent = AN_PHASE[lv - 1] + ' ' + (d.done || 0) + ' / ' + (d.total || 0);
       });
       anEs.addEventListener('done', e => {
         const d = JSON.parse(e.data);
@@ -1654,10 +1652,11 @@
         anRenderDrill();
         anTag('完成');
         anProg(d.abnormal === 0 ? '分析完成 · 未发现异常窗口 ✓' : '分析完成 · ① 选择异常日 → ② 异常时 → ③ 异常5分 → ④ 异常10秒', 'ok');
+        const cd = document.getElementById('anCardDone');
+        if (cd) cd.textContent = d.abnormal === 0 ? '无异常窗口' : '异常 ' + d.abnormal + ' 个窗口';
         log('[精准分析] 完成 异常10秒窗=' + d.abnormal);
         try { anEs.close(); } catch (_) {}
         anEs = null;
-        document.getElementById('btnAnalyze').disabled = false;
       });
       anEs.addEventListener('error', e => {
         let msg = '';
@@ -1667,37 +1666,17 @@
         log('[精准分析] 失败: ' + (msg || '未知错误'), true);
         try { anEs.close(); } catch (_) {}
         anEs = null;
-        document.getElementById('btnAnalyze').disabled = false;
       });
       anEs.onerror = function () {
         if (!anEs) return;
         try { anEs.close(); } catch (_) {}
         anEs = null;
-        document.getElementById('btnAnalyze').disabled = false;
         anTag('中断');
         anProg('分析流中断，已停止（可重试）', 'fail');
       };
     }
-    function doAnalyze() {
-      let start = document.getElementById('anStart').value.trim();
-      let end = document.getElementById('anEnd').value.trim();
-      if (!start) {
-        const now = new Date();
-        const yesterday = new Date(now);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const fmt = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-        start = fmt(yesterday) + ' 00:00:00';
-        if (!end) end = fmt(now) + ' 00:00:00';
-        document.getElementById('anStart').value = start;
-        document.getElementById('anEnd').value = end;
-      }
-      document.getElementById('anModal').classList.add('open');
-      if (anEs) { try { anEs.close(); } catch (_) {} anEs = null; }
-      runAnalyze(start, end || '');
-    }
     function closeAnModal() {
       if (anEs) { try { anEs.close(); } catch (_) {} anEs = null; }
-      document.getElementById('btnAnalyze').disabled = false;
       document.getElementById('anModal').classList.remove('open');
     }
     // 快捷时间：计算 [start, end) 范围并填充到指定输入框。
@@ -1730,8 +1709,10 @@
       document.getElementById(eid).value = end;
       log('[精准分析] 快捷范围 ' + k + ' → ' + start + ' ~ ' + end);
     }
-    function setAnQuick(k) { fillQuick(k, 'anStart', 'anEnd'); }
     function setCmpQuick(k) { fillQuick(k, 'cmpStart', 'cmpEnd'); }
+    document.getElementById('anCard').addEventListener('click', function () {
+      document.getElementById('anModal').classList.add('open');
+    });
     document.getElementById('anModalClose').addEventListener('click', closeAnModal);
     document.getElementById('anModal').addEventListener('click', function (e) {
       if (e.target.id !== 'anModal') return;
@@ -1772,16 +1753,6 @@
 
     // 初始化绘制
     requestAnimationFrame(drawIncr);
-
-    // 精准分析预填默认时间（昨天 → 今天）
-    (function() {
-      const now = new Date();
-      const yesterday = new Date(now);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const fmt = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-      document.getElementById('anStart').value = fmt(yesterday) + ' 00:00:00';
-      document.getElementById('anEnd').value = fmt(now) + ' 00:00:00';
-    })();
   </script>
 
 </body></html>
